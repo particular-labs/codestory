@@ -1,6 +1,6 @@
 {
   "name": "@particular-labs/codestory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Living storyboards for codebases — boards chain flows end-to-end, agents maintain them, a local viewer presents them.",
   "type": "module",
   "license": "MIT",
