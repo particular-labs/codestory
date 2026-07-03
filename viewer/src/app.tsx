@@ -234,13 +234,28 @@ export class App extends React.Component<AppProps, AppState> {
     const { boards, manifest } = this.props.data;
     const byId = new Map(boards.map((b) => [b.id, b]));
     const subIds = new Set(boards.flatMap((b) => b.nodes.map((n) => n.board)).filter(Boolean) as string[]);
-    const order = boards.filter((b) => !subIds.has(b.id)).map((b) => b.id);
+    let order = boards.filter((b) => !subIds.has(b.id)).map((b) => b.id);
     const chainEdges: EdgeTuple[] = [];
     for (const b of boards) {
       for (const l of b.links) {
         if (order.includes(b.id) && order.includes(l.board)) chainEdges.push([b.id, l.board, `${l.exit} → ${l.entry}`]);
       }
     }
+    // boards arrive in file order (alphabetical) — re-order along the chain so
+    // "BOARD n" and the rail read as the movie, not the directory listing
+    const indeg = new Map(order.map((id) => [id, 0]));
+    chainEdges.forEach(([, to]) => indeg.set(to, (indeg.get(to) ?? 0) + 1));
+    const queue = order.filter((id) => indeg.get(id) === 0);
+    const sorted: string[] = [];
+    while (queue.length) {
+      const u = queue.shift()!;
+      sorted.push(u);
+      chainEdges.filter(([from]) => from === u).forEach(([, to]) => {
+        indeg.set(to, indeg.get(to)! - 1);
+        if (indeg.get(to) === 0) queue.push(to);
+      });
+    }
+    order = [...sorted, ...order.filter((id) => !sorted.includes(id))]; // cycles/orphans keep file order
     this._d = { byId, order, chainEdges, journeys: manifest?.journeys ?? [] };
     return this._d;
   }
