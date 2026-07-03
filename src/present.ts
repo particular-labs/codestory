@@ -124,6 +124,7 @@ export const presentCommand = defineCommand({
   args: {
     dir: { type: 'string', description: 'Path to the .codestory directory', default: '.codestory' },
     port: { type: 'string', description: 'Port to listen on', default: '4747' },
+    host: { type: 'string', description: 'Bind address. Default loopback; pass 0.0.0.0 to view from other devices on your network (serves repo flow data — trusted networks only)', default: '127.0.0.1' },
     'no-open': { type: 'boolean', description: 'Do not open the browser', default: false },
   },
   async run({ args }) {
@@ -131,10 +132,11 @@ export const presentCommand = defineCommand({
     const r = await validateDir(dir);
     for (const issue of r.issues) console.error(`⚠ ${issue.file}: ${issue.message}`);
     const port = Number(args.port);
-    // loopback only — this serves repo internals; LAN exposure is share-layer (v2) scope
-    serve({ fetch: buildApp(dir).fetch, port, hostname: '127.0.0.1' });
+    // loopback by default — this serves repo internals; --host is an explicit opt-in
+    serve({ fetch: buildApp(dir).fetch, port, hostname: args.host });
     const url = `http://localhost:${port}`;
     console.log(`codestory present → ${url}  (${r.journeys.length} journeys)`);
+    if (args.host !== '127.0.0.1') console.log(`  bound to ${args.host} — reachable from your network`);
     if (!args['no-open']) openBrowser(url);
   },
 });
