@@ -21,13 +21,13 @@ const manifest: Json = {
   $schema: 'codestory/manifest.v0',
   version: 1,
   project: 'Demo',
-  journeys: [
-    { id: 'ops', title: 'Ops', start: { board: 'alpha', entry: 'start' }, boards: ['alpha', 'beta'] },
+  personas: [
+    { id: 'ops', title: 'Ops', start: { journey: 'alpha', entry: 'start' }, journeys: ['alpha', 'beta'] },
   ],
 };
 
 const alpha: Json = {
-  $schema: 'codestory/board.v0',
+  $schema: 'codestory/journey.v0',
   version: 1,
   id: 'alpha',
   title: 'Alpha',
@@ -35,18 +35,18 @@ const alpha: Json = {
   exits: ['done'],
   nodes: [
     { id: 'a', type: 'step', label: 'A' },
-    { id: 'sub', type: 'step', label: 'Sub', board: 'beta' },
+    { id: 'sub', type: 'step', label: 'Sub', journey: 'beta' },
     { id: 'x', type: 'exit', port: 'done' },
   ],
   edges: [
     { from: 'a', to: 'sub' },
     { from: 'sub', to: 'x' },
   ],
-  links: [{ exit: 'done', board: 'beta', entry: 'start' }],
+  links: [{ exit: 'done', journey: 'beta', entry: 'start' }],
 };
 
 const beta: Json = {
-  $schema: 'codestory/board.v0',
+  $schema: 'codestory/journey.v0',
   version: 1,
   id: 'beta',
   title: 'Beta',
@@ -56,8 +56,8 @@ const beta: Json = {
 
 const good = {
   '.codestory/codestory.json': manifest,
-  '.codestory/alpha.board.json': alpha,
-  '.codestory/beta.board.json': beta,
+  '.codestory/alpha.journey.json': alpha,
+  '.codestory/beta.journey.json': beta,
 };
 
 async function issuesOf(files: Record<string, Json | string>) {
@@ -70,7 +70,7 @@ describe('validateDir', () => {
     const r = await issuesOf(good);
     expect(r.issues).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.boards).toHaveLength(2);
+    expect(r.journeys).toHaveLength(2);
     expect(r.manifest?.project).toBe('Demo');
   });
 
@@ -82,53 +82,53 @@ describe('validateDir', () => {
   });
 
   test('malformed JSON → issue, not crash', async () => {
-    const r = await issuesOf({ ...good, '.codestory/broken.board.json': '{ nope' });
+    const r = await issuesOf({ ...good, '.codestory/broken.journey.json': '{ nope' });
     expect(r.ok).toBe(false);
   });
 
   test('schema violation reported with file', async () => {
     const r = await issuesOf({
       ...good,
-      '.codestory/bad.board.json': { $schema: 'codestory/board.v0', version: 1, id: 'bad', title: 'Bad', nodes: [{ id: 'n', type: 'wat', label: 'N' }] },
+      '.codestory/bad.journey.json': { $schema: 'codestory/journey.v0', version: 1, id: 'bad', title: 'Bad', nodes: [{ id: 'n', type: 'wat', label: 'N' }] },
     });
     expect(r.ok).toBe(false);
-    expect(r.issues.some((i) => i.file.includes('bad.board.json'))).toBe(true);
+    expect(r.issues.some((i) => i.file.includes('bad.journey.json'))).toBe(true);
   });
 
-  test('link to unknown board → issue', async () => {
-    const a = { ...alpha, links: [{ exit: 'done', board: 'ghost', entry: 'start' }] };
-    const r = await issuesOf({ ...good, '.codestory/alpha.board.json': a });
+  test('link to unknown journey → issue', async () => {
+    const a = { ...alpha, links: [{ exit: 'done', journey: 'ghost', entry: 'start' }] };
+    const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
-  test('link to unknown entry on target board → issue', async () => {
-    const a = { ...alpha, links: [{ exit: 'done', board: 'beta', entry: 'side-door' }] };
-    const r = await issuesOf({ ...good, '.codestory/alpha.board.json': a });
+  test('link to unknown entry on target journey → issue', async () => {
+    const a = { ...alpha, links: [{ exit: 'done', journey: 'beta', entry: 'side-door' }] };
+    const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('side-door'))).toBe(true);
   });
 
   test('link from undeclared exit port → issue', async () => {
-    const a = { ...alpha, links: [{ exit: 'undeclared', board: 'beta', entry: 'start' }] };
-    const r = await issuesOf({ ...good, '.codestory/alpha.board.json': a });
+    const a = { ...alpha, links: [{ exit: 'undeclared', journey: 'beta', entry: 'start' }] };
+    const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('undeclared'))).toBe(true);
   });
 
   test('exit node port not in exits[] → issue', async () => {
     const a = { ...alpha, exits: [], links: [], nodes: alpha.nodes };
-    const r = await issuesOf({ ...good, '.codestory/alpha.board.json': a });
+    const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('done'))).toBe(true);
   });
 
-  test('sub-board ref to unknown board → issue', async () => {
-    const nodes = [{ id: 'sub', type: 'step', label: 'Sub', board: 'ghost' }];
+  test('sub-journey ref to unknown journey → issue', async () => {
+    const nodes = [{ id: 'sub', type: 'step', label: 'Sub', journey: 'ghost' }];
     const a = { ...alpha, nodes, edges: [], links: [] };
-    const r = await issuesOf({ ...good, '.codestory/alpha.board.json': a });
+    const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
   test('edge endpoints must be node ids', async () => {
     const a = { ...alpha, edges: [{ from: 'a', to: 'nowhere' }] };
-    const r = await issuesOf({ ...good, '.codestory/alpha.board.json': a });
+    const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('nowhere'))).toBe(true);
   });
 
@@ -138,13 +138,13 @@ describe('validateDir', () => {
       nodes: [{ id: 'a', type: 'step', label: 'A', refs: [ref] }],
       edges: [], links: [],
     });
-    const missing = await issuesOf({ ...good, '.codestory/alpha.board.json': withRef('src/nope.ts') });
+    const missing = await issuesOf({ ...good, '.codestory/alpha.journey.json': withRef('src/nope.ts') });
     expect(missing.issues.some((i) => i.message.includes('src/nope.ts'))).toBe(true);
 
     const present = await issuesOf({
       ...good,
       'src/yes.ts': 'export {}',
-      '.codestory/alpha.board.json': withRef('src/yes.ts#Symbol'),
+      '.codestory/alpha.journey.json': withRef('src/yes.ts#Symbol'),
     });
     expect(present.issues).toEqual([]);
   });
@@ -155,9 +155,9 @@ describe('validateDir', () => {
       nodes: [{ id: 'a', type: 'step', label: 'A', refs: [ref] }],
       edges: [], links: [],
     });
-    const empty = await issuesOf({ ...good, '.codestory/alpha.board.json': withRef('#Missing') });
+    const empty = await issuesOf({ ...good, '.codestory/alpha.journey.json': withRef('#Missing') });
     expect(empty.issues.some((i) => i.message.includes('repo-relative'))).toBe(true);
-    const escape = await issuesOf({ ...good, '.codestory/alpha.board.json': withRef('../../etc/passwd') });
+    const escape = await issuesOf({ ...good, '.codestory/alpha.journey.json': withRef('../../etc/passwd') });
     expect(escape.issues.some((i) => i.message.includes('repo-relative'))).toBe(true);
   });
 
@@ -167,81 +167,81 @@ describe('validateDir', () => {
       nodes: [{ id: 'a', type: 'step', label: 'A', status: 'built' }],
       edges: [], links: [],
     };
-    const r = await issuesOf({ ...good, '.codestory/alpha.board.json': a });
+    const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.match(/built.*tests/))).toBe(true);
   });
 
-  test('journey referencing unknown board/entry → issue', async () => {
-    const m = { ...manifest, journeys: [{ id: 'j', title: 'J', start: { board: 'ghost', entry: 'start' }, boards: ['alpha'] }] };
+  test('persona referencing unknown journey/entry → issue', async () => {
+    const m = { ...manifest, personas: [{ id: 'j', title: 'J', start: { journey: 'ghost', entry: 'start' }, journeys: ['alpha'] }] };
     const r = await issuesOf({ ...good, '.codestory/codestory.json': m });
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
-  test('duplicate board ids and node ids → issues', async () => {
-    const dupBoard = { ...beta, id: 'alpha' };
-    const r = await issuesOf({ ...good, '.codestory/beta.board.json': dupBoard });
-    expect(r.issues.some((i) => i.message.includes('duplicate board id'))).toBe(true);
+  test('duplicate journey ids and node ids → issues', async () => {
+    const dupJourney = { ...beta, id: 'alpha' };
+    const r = await issuesOf({ ...good, '.codestory/beta.journey.json': dupJourney });
+    expect(r.issues.some((i) => i.message.includes('duplicate journey id'))).toBe(true);
 
     const dupNodes = { ...beta, nodes: [{ id: 'b', type: 'step', label: 'B' }, { id: 'b', type: 'step', label: 'B2' }] };
-    const r2 = await issuesOf({ ...good, '.codestory/beta.board.json': dupNodes });
+    const r2 = await issuesOf({ ...good, '.codestory/beta.journey.json': dupNodes });
     expect(r2.issues.some((i) => i.message.includes("'b'"))).toBe(true);
   });
 
-  test('valid variant board (same ports as base) → green', async () => {
+  test('valid variant journey (same ports as base) → green', async () => {
     const variant = {
       ...alpha,
       id: 'alpha@v2',
       variantOf: 'alpha',
       variantLabel: 'V2 take',
     };
-    const r = await issuesOf({ ...good, '.codestory/alpha@v2.board.json': variant });
+    const r = await issuesOf({ ...good, '.codestory/alpha@v2.journey.json': variant });
     expect(r.issues).toEqual([]);
   });
 
-  test('variantOf must reference an existing base board', async () => {
+  test('variantOf must reference an existing base journey', async () => {
     const variant = { ...beta, id: 'x@v2', variantOf: 'ghost', links: [] };
-    const r = await issuesOf({ ...good, '.codestory/x@v2.board.json': variant });
+    const r = await issuesOf({ ...good, '.codestory/x@v2.journey.json': variant });
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
   test('variant ports must match the base (ports are the contract)', async () => {
     const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha', exits: ['other'], links: [], nodes: [{ id: 'a', type: 'step', label: 'A' }], edges: [] };
-    const r = await issuesOf({ ...good, '.codestory/alpha@v2.board.json': variant });
+    const r = await issuesOf({ ...good, '.codestory/alpha@v2.journey.json': variant });
     expect(r.issues.some((i) => i.message.match(/exits.*match base/))).toBe(true);
   });
 
-  test('links, sub-board refs, and journeys must target base boards, not variants', async () => {
+  test('links, sub-journey refs, and personas must target base journeys, not variants', async () => {
     const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha' };
-    const withVariant = { ...good, '.codestory/alpha@v2.board.json': variant };
+    const withVariant = { ...good, '.codestory/alpha@v2.journey.json': variant };
 
-    const badLink = { ...beta, entries: ['start'], exits: ['out'], nodes: [...(beta.nodes as unknown[]), { id: 'x', type: 'exit', port: 'out' }], links: [{ exit: 'out', board: 'alpha@v2', entry: 'start' }] };
-    const r1 = await issuesOf({ ...withVariant, '.codestory/beta.board.json': badLink });
-    expect(r1.issues.some((i) => i.message.match(/base board/))).toBe(true);
+    const badLink = { ...beta, entries: ['start'], exits: ['out'], nodes: [...(beta.nodes as unknown[]), { id: 'x', type: 'exit', port: 'out' }], links: [{ exit: 'out', journey: 'alpha@v2', entry: 'start' }] };
+    const r1 = await issuesOf({ ...withVariant, '.codestory/beta.journey.json': badLink });
+    expect(r1.issues.some((i) => i.message.match(/base journey/))).toBe(true);
 
-    const badSub = { ...beta, nodes: [{ id: 'b', type: 'step', label: 'B', board: 'alpha@v2' }] };
-    const r2 = await issuesOf({ ...withVariant, '.codestory/beta.board.json': badSub });
-    expect(r2.issues.some((i) => i.message.match(/base board/))).toBe(true);
+    const badSub = { ...beta, nodes: [{ id: 'b', type: 'step', label: 'B', journey: 'alpha@v2' }] };
+    const r2 = await issuesOf({ ...withVariant, '.codestory/beta.journey.json': badSub });
+    expect(r2.issues.some((i) => i.message.match(/base journey/))).toBe(true);
 
-    const badJourney = { ...manifest, journeys: [{ id: 'j', title: 'J', start: { board: 'alpha@v2', entry: 'start' }, boards: ['alpha@v2'] }] };
-    const r3 = await issuesOf({ ...withVariant, '.codestory/codestory.json': badJourney });
-    expect(r3.issues.some((i) => i.message.match(/base board/))).toBe(true);
+    const badPersona = { ...manifest, personas: [{ id: 'j', title: 'J', start: { journey: 'alpha@v2', entry: 'start' }, journeys: ['alpha@v2'] }] };
+    const r3 = await issuesOf({ ...withVariant, '.codestory/codestory.json': badPersona });
+    expect(r3.issues.some((i) => i.message.match(/base journey/))).toBe(true);
   });
 
   test('empty variantOf is rejected by schema', async () => {
-    const r = await issuesOf({ ...good, '.codestory/beta.board.json': { ...beta, variantOf: '' } });
+    const r = await issuesOf({ ...good, '.codestory/beta.journey.json': { ...beta, variantOf: '' } });
     expect(r.ok).toBe(false);
   });
 
   test('variant of a variant is rejected', async () => {
     const v1 = { ...alpha, id: 'alpha@v1', variantOf: 'alpha' };
     const v2 = { ...alpha, id: 'alpha@v2', variantOf: 'alpha@v1' };
-    const r = await issuesOf({ ...good, '.codestory/alpha@v1.board.json': v1, '.codestory/alpha@v2.board.json': v2 });
-    expect(r.issues.some((i) => i.message.includes('base board'))).toBe(true);
+    const r = await issuesOf({ ...good, '.codestory/alpha@v1.journey.json': v1, '.codestory/alpha@v2.journey.json': v2 });
+    expect(r.issues.some((i) => i.message.includes('base journey'))).toBe(true);
   });
 
-  test('board file name must match board id', async () => {
-    const r = await issuesOf({ ...good, '.codestory/gamma.board.json': { ...beta, id: 'delta' } });
-    expect(r.issues.some((i) => i.file.includes('gamma.board.json'))).toBe(true);
+  test('journey file name must match journey id', async () => {
+    const r = await issuesOf({ ...good, '.codestory/gamma.journey.json': { ...beta, id: 'delta' } });
+    expect(r.issues.some((i) => i.file.includes('gamma.journey.json'))).toBe(true);
   });
 
   // ── notes.v0 sidecar ──
@@ -254,12 +254,12 @@ describe('validateDir', () => {
     expect(r.notes).toEqual([]);
   });
 
-  test('valid notes referencing real board + node → green, notes returned', async () => {
+  test('valid notes referencing real journey + node → green, notes returned', async () => {
     const r = await issuesOf({
       ...good,
       '.codestory/notes.json': notesFile([
-        { id: 'n1', board: 'alpha', node: 'a', text: 'fix A', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
-        { id: 'n2', board: 'beta', text: 'board note', status: 'applied', createdAt: '2026-07-03T00:00:00.000Z' },
+        { id: 'n1', journey: 'alpha', node: 'a', text: 'fix A', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
+        { id: 'n2', journey: 'beta', text: 'journey note', status: 'applied', createdAt: '2026-07-03T00:00:00.000Z' },
       ]),
     });
     expect(r.issues).toEqual([]);
@@ -267,19 +267,19 @@ describe('validateDir', () => {
     expect(r.notes[0]?.id).toBe('n1');
   });
 
-  test('note referencing unknown board → issue', async () => {
+  test('note referencing unknown journey → issue', async () => {
     const r = await issuesOf({
       ...good,
-      '.codestory/notes.json': notesFile([{ id: 'n', board: 'ghost', text: 't', createdAt: 'x' }]),
+      '.codestory/notes.json': notesFile([{ id: 'n', journey: 'ghost', text: 't', createdAt: 'x' }]),
     });
     expect(r.ok).toBe(false);
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
-  test('note referencing unknown node on a real board → issue', async () => {
+  test('note referencing unknown node on a real journey → issue', async () => {
     const r = await issuesOf({
       ...good,
-      '.codestory/notes.json': notesFile([{ id: 'n', board: 'alpha', node: 'nope', text: 't', createdAt: 'x' }]),
+      '.codestory/notes.json': notesFile([{ id: 'n', journey: 'alpha', node: 'nope', text: 't', createdAt: 'x' }]),
     });
     expect(r.ok).toBe(false);
     expect(r.issues.some((i) => i.message.includes('nope'))).toBe(true);
@@ -289,8 +289,8 @@ describe('validateDir', () => {
     const r = await issuesOf({
       ...good,
       '.codestory/notes.json': notesFile([
-        { id: 'dup', board: 'alpha', text: 'a', createdAt: 'x' },
-        { id: 'dup', board: 'beta', text: 'b', createdAt: 'x' },
+        { id: 'dup', journey: 'alpha', text: 'a', createdAt: 'x' },
+        { id: 'dup', journey: 'beta', text: 'b', createdAt: 'x' },
       ]),
     });
     expect(r.ok).toBe(false);
@@ -300,16 +300,16 @@ describe('validateDir', () => {
   test('malformed notes.json → issue, not crash', async () => {
     const bad = await issuesOf({ ...good, '.codestory/notes.json': '{ nope' });
     expect(bad.ok).toBe(false);
-    const badSchema = await issuesOf({ ...good, '.codestory/notes.json': notesFile([{ id: 'n', board: 'alpha', text: '', createdAt: 'x' }]) });
+    const badSchema = await issuesOf({ ...good, '.codestory/notes.json': notesFile([{ id: 'n', journey: 'alpha', text: '', createdAt: 'x' }]) });
     expect(badSchema.ok).toBe(false);
   });
 
-  test('note may reference a variant board id', async () => {
+  test('note may reference a variant journey id', async () => {
     const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha', variantLabel: 'V2' };
     const r = await issuesOf({
       ...good,
-      '.codestory/alpha@v2.board.json': variant,
-      '.codestory/notes.json': notesFile([{ id: 'n', board: 'alpha@v2', node: 'a', text: 't', createdAt: 'x' }]),
+      '.codestory/alpha@v2.journey.json': variant,
+      '.codestory/notes.json': notesFile([{ id: 'n', journey: 'alpha@v2', node: 'a', text: 't', createdAt: 'x' }]),
     });
     expect(r.issues).toEqual([]);
   });

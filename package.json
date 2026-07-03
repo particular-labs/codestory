@@ -1,7 +1,7 @@
 {
   "name": "@particular-labs/codestory",
-  "version": "0.2.0",
-  "description": "Living storyboards for codebases — boards chain flows end-to-end, agents maintain them, a local viewer presents them.",
+  "version": "0.3.0",
+  "description": "Living journey maps for codebases — journeys chain flows end-to-end, agents maintain them, a local viewer presents them.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -9,7 +9,7 @@
     "url": "git+https://github.com/particular-labs/codestory.git"
   },
   "keywords": [
-    "storyboard",
+    "journey-map",
     "documentation",
     "diagram",
     "flowchart",

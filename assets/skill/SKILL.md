@@ -1,21 +1,22 @@
 ---
 name: codestory
 description: >-
-  Maintain flow boards for a codebase with codestory — living storyboards kept
+  Maintain flow journeys for a codebase with codestory — living journey maps kept
   in sync with the code. Use when asked to capture flows, map a codebase into
-  boards, work board-first (write the visual spec before code), backfill boards
-  after a change, audit boards for drift, or apply codestory notes/annotations.
-  Trigger phrases: "maintain flow boards", "capture flows", "board-first",
-  "codestory boards", "apply codestory notes", "audit boards for drift".
+  journeys, work journey-first (write the visual spec before code), backfill
+  journeys after a change, audit journeys for drift, or apply codestory
+  notes/annotations. Trigger phrases: "maintain flow journeys", "capture flows",
+  "journey-first", "codestory journeys", "apply codestory notes",
+  "audit journeys for drift".
 ---
 
 # codestory
 
-Boards are flows: a sequence of `step` / `decision` / `exit` nodes. Boards chain
-into journeys by wiring one board's exit **port** to another board's entry. You
-(the agent) keep boards true to the code; a local viewer presents them. Files
-live in `.codestory/`. `codestory validate` is the contract check — a nonzero
-exit means a broken reference, and you must not commit over it.
+Journeys are flows: a sequence of `step` / `decision` / `exit` nodes. Journeys
+chain end-to-end by wiring one journey's exit **port** to another journey's
+entry. You (the agent) keep journeys true to the code; a local viewer presents
+them. Files live in `.codestory/`. `codestory validate` is the contract check —
+a nonzero exit means a broken reference, and you must not commit over it.
 
 ## Schema cheat-sheet
 
@@ -27,25 +28,25 @@ exit means a broken reference, and you must not commit over it.
   "$schema": "codestory/manifest.v0",
   "version": 1,
   "project": "MyApp",
-  "journeys": [ // named entry lenses into the graph; no single root
+  "personas": [ // named entry lenses into the graph; no single root
     { "id": "signup", "title": "Sign up",
-      "start": { "board": "signup", "entry": "start" },
-      "boards": ["signup", "verify-email"] } // bases only, never variants
+      "start": { "journey": "signup", "entry": "start" },
+      "journeys": ["signup", "verify-email"] } // bases only, never variants
   ]
 }
 ```
 
 ```jsonc
-// .codestory/<id>.board.json — one board per flow; file name === board id
+// .codestory/<id>.journey.json — one journey per flow; file name === journey id
 {
-  "$schema": "codestory/board.v0",
+  "$schema": "codestory/journey.v0",
   "version": 1,                 // bump on structural change
   "id": "signup",
   "title": "Sign up",
   "status": "built",            // planned | built | drifted (default planned)
   "entries": ["start"],         // entry ports callers link to
   "exits": ["verified", "abandoned"], // exit ports (the contract)
-  "nodes": [                    // ≤ 9 nodes; beyond that, extract a sub-board
+  "nodes": [                    // ≤ 9 nodes; beyond that, extract a sub-journey
     // types: step | decision | exit ONLY.
     // every field optional EXCEPT id/type/label — but exit's label is optional
     // and its `port` is required; every non-exit node requires a `label`.
@@ -54,7 +55,7 @@ exit means a broken reference, and you must not commit over it.
       "status": "built", "tests": ["tests/signup.test.ts"] }, // built ⇒ tests
     { "id": "valid?", "type": "decision", "label": "Input valid?" },
     { "id": "create", "type": "step", "label": "Create account",
-      "board": "create-user", "with": { "plan": "free" } }, // sub-flow: separate file + args
+      "journey": "create-user", "with": { "plan": "free" } }, // sub-flow: separate file + args
     { "id": "ok", "type": "exit", "port": "verified" }, // port must be in exits[]
     { "id": "bail", "type": "exit", "port": "abandoned" }
   ],
@@ -63,34 +64,34 @@ exit means a broken reference, and you must not commit over it.
     { "from": "valid?", "to": "create", "when": "valid" },
     { "from": "valid?", "to": "bail", "when": "invalid" }
   ],
-  "links": [ // wire THIS board's exit port → another base board's entry
-    { "exit": "verified", "board": "verify-email", "entry": "start" }
+  "links": [ // wire THIS journey's exit port → another base journey's entry
+    { "exit": "verified", "journey": "verify-email", "entry": "start" }
   ]
 }
 ```
 
 ```jsonc
-// .codestory/notes.json — reviewer annotations sidecar (optional; never inline in a board)
+// .codestory/notes.json — reviewer annotations sidecar (optional; never inline in a journey)
 { "$schema": "codestory/notes.v0", "version": 1,
-  "notes": [ { "id": "n1", "board": "signup", "node": "valid?",
+  "notes": [ { "id": "n1", "journey": "signup", "node": "valid?",
                "text": "Add password-strength check", "status": "open",
                "createdAt": "2026-07-03T00:00:00Z" } ] } // status: open | applied
 ```
 
-Rules the validator enforces: one board per flow; node ids unique; edges/links
+Rules the validator enforces: one journey per flow; node ids unique; edges/links
 resolve; exit nodes only use ports declared in `exits[]`; `built` nodes carry
 `tests`; `refs` (the part before `#`) exist on disk relative to the repo root
-(the parent of `.codestory/`); journeys/links/`node.board` target **base** boards
-only. **Variants**: an alternate take on a base, file `<base>@<variant>.board.json`
-with `id` matching, plus `variantOf: "<base>"` and `variantLabel`. A variant must
-declare the **same** `entries`/`exits` as its base — ports are the contract, so
-callers always link to the base id.
+(the parent of `.codestory/`); personas/links/`node.journey` target **base**
+journeys only. **Variants**: an alternate take on a base, file
+`<base>@<variant>.journey.json` with `id` matching, plus `variantOf: "<base>"`
+and `variantLabel`. A variant must declare the **same** `entries`/`exits` as its
+base — ports are the contract, so callers always link to the base id.
 
-## Board-first rule
+## Journey-first rule
 
-New feature or refactor → write or extend the board(s) (or add a variant) BEFORE
-the code. The board is the visual spec: nodes are `planned`, refs point at where
-code *will* live, exits name the outcomes. Then implement against it.
+New feature or refactor → write or extend the journey(s) (or add a variant)
+BEFORE the code. The journey is the visual spec: nodes are `planned`, refs point
+at where code *will* live, exits name the outcomes. Then implement against it.
 
 ## Capture recipe (mapping an existing codebase)
 
@@ -98,11 +99,11 @@ You do the reading — there is no static-analysis tool; open the code yourself.
 
 1. Read the codebase and identify 5–8 load-bearing flows (the journeys a user or
    system actually runs end to end).
-2. Emit `codestory.json` journeys + one board per flow. Keep each board ≤ 9 nodes;
-   push detail into sub-boards via `node.board` + `with`.
+2. Emit `codestory.json` personas + one journey per flow. Keep each journey ≤ 9
+   nodes; push detail into sub-journeys via `node.journey` + `with`.
 3. Add disk-true `refs` to the real files/lines each node maps to.
 4. Set statuses honestly: `built` only when the node has passing `tests`;
-   `drifted` when the board and code diverge or tests are missing; `planned`
+   `drifted` when the journey and code diverge or tests are missing; `planned`
    otherwise.
 5. `codestory validate` until clean.
 
@@ -119,17 +120,17 @@ You do the reading — there is no static-analysis tool; open the code yourself.
 
 - `refs` that no longer exist on disk → fix the path or mark the node `drifted`.
 - nodes `built` without `tests` → add tests or drop to `drifted`.
-- board vs. code divergence (branches/steps that no longer match) → mark
-  affected nodes/board `drifted` and note what changed.
+- journey vs. code divergence (branches/steps that no longer match) → mark
+  affected nodes/journey `drifted` and note what changed.
 - run `codestory validate` — a nonzero exit lists the broken references; clear
   them before you consider the audit done.
 
 ## Notes workflow (annotations loop)
 
-Reviewers drop notes in the viewer against a board/node; you resolve them:
+Reviewers drop notes in the viewer against a journey/node; you resolve them:
 
 1. Read `.codestory/notes.json`. For each note with `status: "open"`:
-2. Apply the requested change to the referenced board/node **and** the code its
+2. Apply the requested change to the referenced journey/node **and** the code its
    `refs` point at.
 3. Flip the note to `applied` — either edit `notes.json` directly, or (while
    `codestory present` is running) `POST /api/notes` with `{ "id": "n1",

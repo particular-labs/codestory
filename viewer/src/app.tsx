@@ -17,11 +17,11 @@ export interface ApiNode {
   status?: Status;
   tests?: string[];
   ticket?: string;
-  board?: string;
+  journey?: string;
   port?: string;
 }
 
-export interface ApiBoard {
+export interface ApiJourney {
   id: string;
   title: string;
   status: Status;
@@ -31,20 +31,20 @@ export interface ApiBoard {
   exits: string[];
   nodes: ApiNode[];
   edges: Array<{ from: string; to: string; label?: string; when?: string }>;
-  links: Array<{ exit: string; board: string; entry: string }>;
+  links: Array<{ exit: string; journey: string; entry: string }>;
 }
 
-export interface ApiJourney {
+export interface ApiPersona {
   id: string;
   title: string;
   persona?: string;
-  start: { board: string; entry: string };
-  boards: string[];
+  start: { journey: string; entry: string };
+  journeys: string[];
 }
 
 export interface ApiNote {
   id: string;
-  board: string;
+  journey: string;
   node?: string;
   text: string;
   status: 'open' | 'applied';
@@ -52,8 +52,8 @@ export interface ApiNote {
 }
 
 export interface ApiData {
-  manifest: { project: string; journeys: ApiJourney[] } | null;
-  boards: ApiBoard[];
+  manifest: { project: string; personas: ApiPersona[] } | null;
+  journeys: ApiJourney[];
   issues?: Array<{ file: string; message: string }>;
   notes?: ApiNote[];
 }
@@ -214,45 +214,45 @@ const THEMES = {
 const NODE_W = 176, NODE_H = 64;
 const CARD_W = 224, CARD_H = 120;
 const ROOT_LABEL = 'Root'; // one name for the chain-map home, shared by rail + breadcrumb
-const PATH_SEP = '\u0000'; // rail-tree path separator — no filesystem allows it in a filename, so never in a board id
+const PATH_SEP = '\u0000'; // rail-tree path separator — no filesystem allows it in a filename, so never in a journey id
 const GLYPHS: Record<string, string> = { step: '', decision: '◇ ', subflow: '▤ ', exit: '⚑ ' };
 const TYPE_TEXT: Record<string, string> = { step: 'STEP', decision: 'DECISION', subflow: 'SUB-FLOW', exit: 'EXIT' };
 
-interface StackEntry { id: string; callerBoard?: string; callerNode?: string }
+interface StackEntry { id: string; callerJourney?: string; callerNode?: string }
 
 interface AppState {
-  data: ApiData; // stateful so SSE live-reload can swap in fresh boards/notes
+  data: ApiData; // stateful so SSE live-reload can swap in fresh journeys/notes
   theme: 'dark' | 'light';
-  view: 'map' | 'board';
+  view: 'map' | 'journey';
   stack: StackEntry[];
   selectedNodeId: string | null;
-  journey: string | null;
+  persona: string | null;
   query: string;
   detailOpen: boolean;
   nodePos: Record<string, { x: number; y: number }>;
   mapPos: Record<string, { x: number; y: number }>;
-  variantSel: Record<string, string>; // base board id → selected version's board id
+  variantSel: Record<string, string>; // base journey id → selected version's journey id
   flow: 'horizontal' | 'vertical'; // SSOT for flow direction — every layout/edge/port reads this
   notesOpen: boolean; // notes hub popover open — doubles as annotate mode (click a node to leave a change-note)
   railOpen: Record<string, boolean>; // rail sub-flow tree: path → expanded (collapsed by default)
-  notePopover: { board: string; node: string } | null; // open note editor
+  notePopover: { journey: string; node: string } | null; // open note editor
   noteDraft: string;
   promptText: string | null; // clipboard fallback overlay
   copied: boolean;
 }
 
-const nodeKind = (n: ApiNode) => (n.board ? 'subflow' : n.type);
+const nodeKind = (n: ApiNode) => (n.journey ? 'subflow' : n.type);
 const nodeTitle = (n: ApiNode) => n.label ?? n.port ?? n.id;
-const portsSummary = (b: ApiBoard) =>
+const portsSummary = (b: ApiJourney) =>
   [b.entries.length ? `entry: ${b.entries.join(', ')}` : '', b.exits.length ? `exits: ${b.exits.join(', ')}` : ''].filter(Boolean).join(' · ');
 
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
     super(props);
-    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false };
+    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false };
   }
 
-  private _d: { byId: Map<string, ApiBoard>; order: string[]; chainEdges: EdgeTuple[]; journeys: ApiJourney[]; variantsByBase: Map<string, ApiBoard[]>; subsByBoard: Map<string, string[]> } | null = null;
+  private _d: { byId: Map<string, ApiJourney>; order: string[]; chainEdges: EdgeTuple[]; personas: ApiPersona[]; variantsByBase: Map<string, ApiJourney[]>; subsByJourney: Map<string, string[]> } | null = null;
   private _lay: Record<string, Layout> = {};
   private _es: EventSource | null = null;
 
@@ -269,20 +269,20 @@ export class App extends React.Component<AppProps, AppState> {
 
   async refetch() {
     try {
-      const res = await fetch('/api/boards');
+      const res = await fetch('/api/journeys');
       if (!res.ok) return;
       const data = (await res.json()) as ApiData;
-      this._d = null; // board set may have changed → drop derived-graph + layout caches
+      this._d = null; // journey set may have changed → drop derived-graph + layout caches
       this._lay = {};
       this.setState((s) => {
-        const byId = new Map(data.boards.map((b) => [b.id, b]));
+        const byId = new Map(data.journeys.map((b) => [b.id, b]));
         const stack = s.stack.filter((e) => byId.has(e.id));
         let selectedNodeId = s.selectedNodeId;
         const top = stack[stack.length - 1];
         if (top) {
           const selVar = s.variantSel[top.id];
-          const board = byId.get(selVar && byId.has(selVar) ? selVar : top.id);
-          if (!board?.nodes.some((n) => n.id === selectedNodeId)) selectedNodeId = board?.nodes[0]?.id ?? null;
+          const journey = byId.get(selVar && byId.has(selVar) ? selVar : top.id);
+          if (!journey?.nodes.some((n) => n.id === selectedNodeId)) selectedNodeId = journey?.nodes[0]?.id ?? null;
         }
         return { data, stack, selectedNodeId, view: stack.length ? s.view : 'map' };
       });
@@ -292,7 +292,7 @@ export class App extends React.Component<AppProps, AppState> {
   // ── notes (annotations) ──
   allNotes() { return this.state.data.notes ?? []; }
   openNotes() { return this.allNotes().filter((n) => n.status === 'open'); }
-  openNotesFor(board: string, node: string) { return this.allNotes().filter((n) => n.board === board && n.node === node && n.status === 'open'); }
+  openNotesFor(journey: string, node: string) { return this.allNotes().filter((n) => n.journey === journey && n.node === node && n.status === 'open'); }
 
   async postNote(body: Record<string, unknown>): Promise<boolean> {
     try {
@@ -301,16 +301,16 @@ export class App extends React.Component<AppProps, AppState> {
       return res.ok;
     } catch { return false; }
   }
-  async saveNote(board: string, node: string, text: string) {
+  async saveNote(journey: string, node: string, text: string) {
     if (!text.trim()) return;
-    const ok = await this.postNote({ board, node, text: text.trim() });
+    const ok = await this.postNote({ journey, node, text: text.trim() });
     if (ok) this.setState({ notePopover: null, noteDraft: '' });
   }
   applyNote(id: string) { void this.postNote({ id, status: 'applied' }); }
   deleteNote(id: string) { void this.postNote({ id, delete: true }); }
   clearNotes() { void this.postNote({ clear: true }); }
-  goToNote(n: { board: string; node?: string }) {
-    this.enterBoard(n.board);
+  goToNote(n: { journey: string; node?: string }) {
+    this.enterJourney(n.journey);
     if (n.node) this.setState({ selectedNodeId: n.node });
   }
 
@@ -320,14 +320,14 @@ export class App extends React.Component<AppProps, AppState> {
     const out: string[] = [
       '# Codestory annotations — apply these changes',
       '',
-      'Each note below requests a change against a node in the codestory boards under `.codestory/`. For each note, edit the referenced board JSON and/or the code it points to, then mark the note applied.',
+      'Each note below requests a change against a node in the codestory journeys under `.codestory/`. For each note, edit the referenced journey JSON and/or the code it points to, then mark the note applied.',
       '',
     ];
     this.openNotes().forEach((note, i) => {
-      const board = d.byId.get(note.board);
-      const node = note.node ? board?.nodes.find((n) => n.id === note.node) : undefined;
+      const journey = d.byId.get(note.journey);
+      const node = note.node ? journey?.nodes.find((n) => n.id === note.node) : undefined;
       out.push(`## Note ${i + 1}`);
-      out.push(`- board: \`${note.board}\`${board ? ` (${board.title})` : ''}`);
+      out.push(`- journey: \`${note.journey}\`${journey ? ` (${journey.title})` : ''}`);
       if (node) {
         out.push(`- node: \`${node.id}\` — ${nodeTitle(node)}`);
         if (node.refs?.length) out.push(`- refs: ${node.refs.join(', ')}`);
@@ -354,42 +354,42 @@ export class App extends React.Component<AppProps, AppState> {
 
   d() {
     if (this._d) return this._d;
-    const { boards, manifest } = this.state.data;
-    const byId = new Map(boards.map((b) => [b.id, b]));
-    const variantsByBase = new Map<string, ApiBoard[]>();
-    boards.forEach((b) => {
+    const { journeys, manifest } = this.state.data;
+    const byId = new Map(journeys.map((b) => [b.id, b]));
+    const variantsByBase = new Map<string, ApiJourney[]>();
+    journeys.forEach((b) => {
       if (b.variantOf) variantsByBase.set(b.variantOf, [...(variantsByBase.get(b.variantOf) ?? []), b]);
     });
-    // the base-board graph defines the tree; variants' extra sub refs don't hide boards
-    const bases = boards.filter((b) => !b.variantOf);
-    const subIds = new Set(bases.flatMap((b) => b.nodes.map((n) => n.board)).filter(Boolean) as string[]);
+    // the base-journey graph defines the tree; variants' extra sub refs don't hide journeys
+    const bases = journeys.filter((b) => !b.variantOf);
+    const subIds = new Set(bases.flatMap((b) => b.nodes.map((n) => n.journey)).filter(Boolean) as string[]);
     let order = bases.filter((b) => !subIds.has(b.id)).map((b) => b.id);
-    // board id → its direct sub-flow board ids (node.board refs), in node order
-    const subsByBoard = new Map<string, string[]>();
+    // journey id → its direct sub-flow journey ids (node.journey refs), in node order
+    const subsByJourney = new Map<string, string[]>();
     bases.forEach((b) => {
-      const subs = b.nodes.flatMap((n) => (n.board ? [n.board] : [])).filter((s, i, a) => a.indexOf(s) === i);
-      if (subs.length) subsByBoard.set(b.id, subs);
+      const subs = b.nodes.flatMap((n) => (n.journey ? [n.journey] : [])).filter((s, i, a) => a.indexOf(s) === i);
+      if (subs.length) subsByJourney.set(b.id, subs);
     });
     // cycle rescue: a mutually-referencing component has no unreferenced root —
-    // surface any base board unreachable from the roots as a root itself
+    // surface any base journey unreachable from the roots as a root itself
     {
       const reachable = new Set(order);
       const queue = [...order];
       while (queue.length) {
-        for (const s of subsByBoard.get(queue.shift()!) ?? []) {
+        for (const s of subsByJourney.get(queue.shift()!) ?? []) {
           if (!reachable.has(s)) { reachable.add(s); queue.push(s); }
         }
       }
       order = [...order, ...bases.filter((b) => !reachable.has(b.id)).map((b) => b.id)];
     }
     const chainEdges: EdgeTuple[] = [];
-    for (const b of boards) {
+    for (const b of journeys) {
       for (const l of b.links) {
-        if (order.includes(b.id) && order.includes(l.board)) chainEdges.push([b.id, l.board, `${l.exit} → ${l.entry}`]);
+        if (order.includes(b.id) && order.includes(l.journey)) chainEdges.push([b.id, l.journey, `${l.exit} → ${l.entry}`]);
       }
     }
-    // boards arrive in file order (alphabetical) — re-order along the chain so
-    // "BOARD n" and the rail read as the movie, not the directory listing
+    // journeys arrive in file order (alphabetical) — re-order along the chain so
+    // "JOURNEY n" and the rail read as the movie, not the directory listing
     const indeg = new Map(order.map((id) => [id, 0]));
     chainEdges.forEach(([, to]) => indeg.set(to, (indeg.get(to) ?? 0) + 1));
     const queue = order.filter((id) => indeg.get(id) === 0);
@@ -403,7 +403,7 @@ export class App extends React.Component<AppProps, AppState> {
       });
     }
     order = [...sorted, ...order.filter((id) => !sorted.includes(id))]; // cycles/orphans keep file order
-    this._d = { byId, order, chainEdges, journeys: manifest?.journeys ?? [], variantsByBase, subsByBoard };
+    this._d = { byId, order, chainEdges, personas: manifest?.personas ?? [], variantsByBase, subsByJourney };
     return this._d;
   }
 
@@ -416,55 +416,55 @@ export class App extends React.Component<AppProps, AppState> {
   // ── navigation ──
 
   curEntry() { return this.state.stack[this.state.stack.length - 1] ?? null; }
-  /** The displayed board: the selected variant of the stacked base id, else the base. */
-  curBoard() {
+  /** The displayed journey: the selected variant of the stacked base id, else the base. */
+  curJourney() {
     const e = this.curEntry();
     if (!e) return null;
     const sel = this.state.variantSel[e.id];
     return this.d().byId.get(sel ?? e.id) ?? null;
   }
-  setVariant(baseId: string, boardId: string) {
-    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: boardId }, selectedNodeId: this.firstNode(boardId) }));
+  setVariant(baseId: string, journeyId: string) {
+    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: journeyId }, selectedNodeId: this.firstNode(journeyId) }));
   }
-  /** The board id actually displayed for a base id (its selected variant, else itself). */
+  /** The journey id actually displayed for a base id (its selected variant, else itself). */
   displayedId(baseId: string) { return this.state.variantSel[baseId] ?? baseId; }
-  nodes() { return this.curBoard()?.nodes ?? []; }
+  nodes() { return this.curJourney()?.nodes ?? []; }
   selIndex() { return this.nodes().findIndex((n) => n.id === this.state.selectedNodeId); }
   firstNode(id: string) { return this.d().byId.get(id)?.nodes[0]?.id ?? null; }
 
-  enterBoard(id: string) { this.setState({ view: 'board', stack: [{ id }], selectedNodeId: this.firstNode(this.displayedId(id)) }); }
-  /** Enter a nested board with its full caller chain (rail tree click) so
-   *  breadcrumbs, Return chips, and the journey lens see the real call stack. */
+  enterJourney(id: string) { this.setState({ view: 'journey', stack: [{ id }], selectedNodeId: this.firstNode(this.displayedId(id)) }); }
+  /** Enter a nested journey with its full caller chain (rail tree click) so
+   *  breadcrumbs, Return chips, and the persona lens see the real call stack. */
   enterPath(ids: string[]) {
     const d = this.d();
     const stack: StackEntry[] = [];
     ids.forEach((id, i) => {
       if (i === 0) { stack.push({ id }); return; }
       const parent = ids[i - 1]!;
-      const callerNode = d.byId.get(this.displayedId(parent))?.nodes.find((n) => n.board === id)?.id;
-      stack.push({ id, callerBoard: parent, ...(callerNode ? { callerNode } : {}) });
+      const callerNode = d.byId.get(this.displayedId(parent))?.nodes.find((n) => n.journey === id)?.id;
+      stack.push({ id, callerJourney: parent, ...(callerNode ? { callerNode } : {}) });
     });
     const last = ids[ids.length - 1]!;
-    this.setState({ view: 'board', stack, selectedNodeId: this.firstNode(this.displayedId(last)) });
+    this.setState({ view: 'journey', stack, selectedNodeId: this.firstNode(this.displayedId(last)) });
   }
   stepInto(subId: string, callerNode: string) {
     const cur = this.curEntry();
     if (!cur) return;
-    this.setState((s) => ({ stack: [...s.stack, { id: subId, callerBoard: cur.id, callerNode }], selectedNodeId: this.firstNode(this.displayedId(subId)) }));
+    this.setState((s) => ({ stack: [...s.stack, { id: subId, callerJourney: cur.id, callerNode }], selectedNodeId: this.firstNode(this.displayedId(subId)) }));
   }
   goCrumb(k: number) {
-    if (k === 0) { this.setState({ view: 'map', journey: null }); return; } // Root = whole map, no lens
+    if (k === 0) { this.setState({ view: 'map', persona: null }); return; } // Root = whole map, no lens
     this.setState((s) => {
       const st = s.stack.slice(0, k);
       return { stack: st, selectedNodeId: this.firstNode(this.displayedId(st[st.length - 1]!.id)) };
     });
   }
   selectNode(id: string) { this.setState({ selectedNodeId: id }); }
-  setJourney(id: string) { this.setState((s) => ({ journey: s.journey === id ? null : id })); }
+  setPersona(id: string) { this.setState((s) => ({ persona: s.persona === id ? null : id })); }
   toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSetting('theme', theme); return { theme }; }); }
 
   private canvasEl = React.createRef<HTMLDivElement>();
-  /** Export the visible canvas (chain map or current board) as a 2x PNG. The
+  /** Export the visible canvas (chain map or current journey) as a 2x PNG. The
    *  clone detaches from the root that defines our CSS vars, and html-to-image's
    *  `style` option can't set custom properties (Object.assign, not setProperty) —
    *  so pin the tokens inline on the real element for the capture, then restore. */
@@ -483,9 +483,9 @@ export class App extends React.Component<AppProps, AppState> {
     }
     const a = document.createElement('a');
     a.href = dataUrl;
-    const board = this.curBoard();
-    const name = board
-      ? `${board.title}${board.variantOf && board.variantLabel ? ` — ${board.variantLabel}` : ''}`
+    const journey = this.curJourney();
+    const name = journey
+      ? `${journey.title}${journey.variantOf && journey.variantLabel ? ` — ${journey.variantLabel}` : ''}`
       : `${this.props.data.manifest?.project ?? 'codestory'} — Root`;
     a.download = `${name.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
     a.click();
@@ -504,10 +504,10 @@ export class App extends React.Component<AppProps, AppState> {
 
   returnToParent() {
     const e = this.curEntry();
-    if (!e?.callerBoard || !e.callerNode) return;
+    if (!e?.callerJourney || !e.callerNode) return;
     // resolve the return edge against the parent's DISPLAYED version — a
     // selected variant may route the caller node differently than the base
-    const parent = this.d().byId.get(this.displayedId(e.callerBoard));
+    const parent = this.d().byId.get(this.displayedId(e.callerJourney));
     const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
     this.setState((s) => ({ stack: s.stack.slice(0, -1), selectedNodeId: returnEdge?.to ?? e.callerNode ?? null }));
   }
@@ -515,17 +515,17 @@ export class App extends React.Component<AppProps, AppState> {
   continueTarget(): { label: string; onClick: () => void } | null {
     const ns = this.nodes();
     const cur = ns[this.selIndex()];
-    const board = this.curBoard();
-    if (!cur || cur.type !== 'exit' || !board) return null;
+    const journey = this.curJourney();
+    if (!cur || cur.type !== 'exit' || !journey) return null;
     const e = this.curEntry();
-    if (e?.callerBoard && e.callerNode) {
-      const parent = this.d().byId.get(this.displayedId(e.callerBoard));
+    if (e?.callerJourney && e.callerNode) {
+      const parent = this.d().byId.get(this.displayedId(e.callerJourney));
       const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
       const returnNode = parent?.nodes.find((n) => n.id === returnEdge?.to);
       return { label: `Return → ${returnNode ? nodeTitle(returnNode) : parent?.title ?? 'parent'}`, onClick: () => this.returnToParent() };
     }
-    const link = board.links.find((l) => l.exit === cur.port);
-    const next = link ? this.d().byId.get(link.board) : null;
+    const link = journey.links.find((l) => l.exit === cur.port);
+    const next = link ? this.d().byId.get(link.journey) : null;
     if (next) return { label: `Continue → ${next.title}`, onClick: () => this.hop(next.id) };
     return null;
   }
@@ -549,11 +549,11 @@ export class App extends React.Component<AppProps, AppState> {
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
       if (moved) return;
-      if (kind === 'map') { this.enterBoard(id); return; }
+      if (kind === 'map') { this.enterJourney(id); return; }
       this.selectNode(id);
       // notes hub open = annotate mode: a click also opens the note editor for this node
-      const board = this.curBoard();
-      if (this.state.notesOpen && board) this.setState({ notePopover: { board: board.id, node: id }, noteDraft: '' });
+      const journey = this.curJourney();
+      if (this.state.notesOpen && journey) this.setState({ notePopover: { journey: journey.id, node: id }, noteDraft: '' });
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -569,11 +569,11 @@ export class App extends React.Component<AppProps, AppState> {
 
     const d = this.d();
     const isMap = this.state.view === 'map';
-    const isBoard = this.state.view === 'board';
+    const isJourney = this.state.view === 'journey';
     const vertical = this.state.flow === 'vertical';
-    const topBoardId = this.state.stack[0]?.id ?? null;
-    const journey = this.state.journey ? d.journeys.find((j) => j.id === this.state.journey) ?? null : null;
-    const journeySet = journey ? new Set(journey.boards) : null;
+    const topJourneyId = this.state.stack[0]?.id ?? null;
+    const persona = this.state.persona ? d.personas.find((j) => j.id === this.state.persona) ?? null : null;
+    const personaSet = persona ? new Set(persona.journeys) : null;
     const q = this.state.query.trim().toLowerCase();
 
     // chain map
@@ -581,7 +581,7 @@ export class App extends React.Component<AppProps, AppState> {
     const mapRects: Record<string, Rect> = {};
     const mapCards = d.order.map((id, idx) => {
       const b = d.byId.get(id)!;
-      const inJ = !journeySet || journeySet.has(id);
+      const inJ = !personaSet || personaSet.has(id);
       const matchQ = !q || b.title.toLowerCase().includes(q) || b.id.includes(q) || b.nodes.some((n) => nodeTitle(n).toLowerCase().includes(q));
       const dim = !inJ || !matchQ;
       const built = b.nodes.filter((n) => n.status === 'built').length;
@@ -595,46 +595,46 @@ export class App extends React.Component<AppProps, AppState> {
         ...(vertical ? { left: '50%', marginLeft: -6 } : { top: 54 }),
         [edge]: -6,
         width: 11, height: 11, borderRadius: '50%', background: 'var(--surface)',
-        border: `2px solid var(--${journeySet && inJ ? 'accent' : 'borderStrong'})`,
+        border: `2px solid var(--${personaSet && inJ ? 'accent' : 'borderStrong'})`,
       });
       return {
-        id, index: `BOARD ${idx + 1}`, title: b.title, sub: portsSummary(b),
+        id, index: `JOURNEY ${idx + 1}`, title: b.title, sub: portsSummary(b),
         meta: `${b.nodes.length} nodes · ${built} built`,
         statusText: statusMeta(b.status).label, statusStyle: statusPill(b.status),
-        style: { position: 'absolute', left: px, top: py, width: CARD_W, height: CARD_H, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', boxShadow: 'var(--shadow)', padding: '13px 15px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', opacity: dim ? 0.34 : 1, transition: 'opacity 200ms ease, box-shadow 160ms ease', outline: inJ && journeySet ? '1.5px solid var(--accent)' : 'none', outlineOffset: -1.5 } as React.CSSProperties,
+        style: { position: 'absolute', left: px, top: py, width: CARD_W, height: CARD_H, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', boxShadow: 'var(--shadow)', padding: '13px 15px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', opacity: dim ? 0.34 : 1, transition: 'opacity 200ms ease, box-shadow 160ms ease', outline: inJ && personaSet ? '1.5px solid var(--accent)' : 'none', outlineOffset: -1.5 } as React.CSSProperties,
         entryPort: portStyle(vertical ? 'top' : 'left'), exitPort: portStyle(vertical ? 'bottom' : 'right'),
         onMouseDown: (e: React.MouseEvent) => this.startDrag('map', id, mkey, px, py, e),
       };
     });
     const mapDims = { w: Math.max(chainLayout.w, 480), h: Math.max(chainLayout.h, 360) };
-    const chainEdgesEl = edgesSvg(d.chainEdges, mapRects, mapDims, journeySet, null, null, vertical);
+    const chainEdgesEl = edgesSvg(d.chainEdges, mapRects, mapDims, personaSet, null, null, vertical);
 
-    // journeys rail
-    const journeyList = d.journeys.map((j) => {
-      const active = this.state.journey === j.id;
+    // personas rail
+    const personaList = d.personas.map((j) => {
+      const active = this.state.persona === j.id;
       return {
-        id: j.id, label: j.title, count: `${j.boards.length}/${d.order.length}`,
-        onClick: () => this.setJourney(j.id),
+        id: j.id, label: j.title, count: `${j.journeys.length}/${d.order.length}`,
+        onClick: () => this.setPersona(j.id),
         dotStyle: { width: 8, height: 8, borderRadius: 2, background: active ? 'var(--accent)' : 'var(--mute)' } as React.CSSProperties,
         style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '8px 10px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', textAlign: 'left' } as React.CSSProperties,
       };
     });
-    const jBoards = journey?.boards ?? null;
-    // top level = root boards only; a journey-listed sub-board stays nested (no duplicate rows)
-    const railOrder = (jBoards ? [...jBoards, ...d.order.filter((id) => !jBoards.includes(id))] : d.order).filter((id) => d.order.includes(id));
+    const jJourneys = persona?.journeys ?? null;
+    // top level = root journeys only; a persona-listed sub-journey stays nested (no duplicate rows)
+    const railOrder = (jJourneys ? [...jJourneys, ...d.order.filter((id) => !jJourneys.includes(id))] : d.order).filter((id) => d.order.includes(id));
     const countBadge: React.CSSProperties = { fontFamily: mono, fontSize: 10, color: 'var(--mute)' };
     const stepBadge: React.CSSProperties = { fontFamily: mono, fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'var(--accentSoft)', border: '1px solid var(--accent)', borderRadius: 5, padding: '1px 6px' };
     const outBadge: React.CSSProperties = { fontFamily: mono, fontSize: 10, color: 'var(--mute)', opacity: 0.7 };
-    const railBoards = railOrder.flatMap((id) => {
+    const railJourneys = railOrder.flatMap((id) => {
       const b = d.byId.get(id);
       if (!b) return [];
-      const active = topBoardId === id;
-      const inJ = !jBoards || jBoards.includes(id);
-      const seq = jBoards ? jBoards.indexOf(id) : -1;
+      const active = topJourneyId === id;
+      const inJ = !jJourneys || jJourneys.includes(id);
+      const seq = jJourneys ? jJourneys.indexOf(id) : -1;
       return [{
         id, inJ,
-        badge: jBoards ? (inJ ? `${seq + 1}` : 'skip') : `${b.nodes.length}`,
-        badgeStyle: jBoards ? (inJ ? stepBadge : outBadge) : countBadge,
+        badge: jJourneys ? (inJ ? `${seq + 1}` : 'skip') : `${b.nodes.length}`,
+        badgeStyle: jJourneys ? (inJ ? stepBadge : outBadge) : countBadge,
       }];
     });
 
@@ -643,9 +643,9 @@ export class App extends React.Component<AppProps, AppState> {
     const railRow = (id: string, path: string, inJ: boolean, badge: string, badgeStyle: React.CSSProperties, visited: Set<string>): React.ReactNode => {
       const b = d.byId.get(id);
       if (!b) return null;
-      const subs = (d.subsByBoard.get(id) ?? []).filter((s) => !visited.has(s));
+      const subs = (d.subsByJourney.get(id) ?? []).filter((s) => !visited.has(s));
       const open = this.state.railOpen[path] ?? true; // expanded by default — visible sub-flows are what makes the rail self-explanatory
-      const active = this.curEntry()?.id === id; // highlight the board being viewed, not the stack root
+      const active = this.curEntry()?.id === id; // highlight the journey being viewed, not the stack root
       return (
         <div key={path} style={css('display:flex;flex-direction:column;gap:2px;')}>
           <div style={css('display:flex;align-items:center;gap:0;')}>
@@ -668,25 +668,25 @@ export class App extends React.Component<AppProps, AppState> {
         </div>
       );
     };
-    const railHint = journey
-      ? journey.persona ?? journey.title
-      : isBoard
-        ? 'Step through nodes with the ◂ ▸ controls below. At an exit, follow the chip to the next board.'
-        : 'Pick a persona to highlight their path, or open a board. Boards chain exit → entry into one continuous movie.';
+    const railHint = persona
+      ? persona.persona ?? persona.title
+      : isJourney
+        ? 'Step through nodes with the ◂ ▸ controls below. At an exit, follow the chip to the next journey.'
+        : 'Pick a persona to highlight their path, or open a journey. Journeys chain exit → entry into one continuous movie.';
 
-    // board view — `board` is the displayed version; ghosts come from the others
+    // journey view — `journey` is the displayed version; ghosts come from the others
     const baseEntryId = this.curEntry()?.id ?? '';
-    const baseBoard = d.byId.get(baseEntryId) ?? null;
+    const baseJourney = d.byId.get(baseEntryId) ?? null;
     const variants = d.variantsByBase.get(baseEntryId) ?? [];
-    const versions = baseBoard ? [baseBoard, ...variants] : [];
-    const board = this.curBoard();
-    const boardId = board?.id ?? '';
+    const versions = baseJourney ? [baseJourney, ...variants] : [];
+    const journey = this.curJourney();
+    const journeyId = journey?.id ?? '';
     const ns = this.nodes();
     const selI = this.selIndex();
     const activeSet = new Set(ns.slice(0, selI < 0 ? 0 : selI + 1).map((n) => n.id));
 
     // with variants, lay out the UNION of all versions so shared nodes don't
-    // jump when the picker switches; without, keep the plain per-board layout
+    // jump when the picker switches; without, keep the plain per-journey layout
     const hasVariants = versions.length > 1;
     const unionNodes: ApiNode[] = [];
     {
@@ -699,52 +699,52 @@ export class App extends React.Component<AppProps, AppState> {
       const k = `${e.from}>${e.to}`;
       if (!unionEdgeKeys.has(k)) { unionEdgeKeys.add(k); unionEdges.push([e.from, e.to]); }
     }));
-    const boardGaps = { nw: NODE_W, nh: NODE_H, main: vertical ? 128 : 260, cross: vertical ? 232 : 128 };
-    const lay = board
+    const journeyGaps = { nw: NODE_W, nh: NODE_H, main: vertical ? 128 : 260, cross: vertical ? 232 : 128 };
+    const lay = journey
       ? hasVariants
-        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionNodes, unionEdges, vertical, boardGaps)
-        : this.layout(boardId, board.nodes, board.edges.map((e) => [e.from, e.to] as [string, string]), vertical, boardGaps)
+        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionNodes, unionEdges, vertical, journeyGaps)
+        : this.layout(journeyId, journey.nodes, journey.edges.map((e) => [e.from, e.to] as [string, string]), vertical, journeyGaps)
       : null;
     const eff = (n: ApiNode) => {
       const base = lay?.pos[n.id] ?? { x: 32, y: 28 };
-      const key = `${boardId}:${vertical ? 'v' : 'h'}:${n.id}`;
+      const key = `${journeyId}:${vertical ? 'v' : 'h'}:${n.id}`;
       const o = this.state.nodePos[key];
       return { x: o?.x ?? base.x, y: o?.y ?? base.y, key };
     };
-    const boardRects: Record<string, Rect> = {};
-    (hasVariants ? unionNodes : ns).forEach((n) => { const p = eff(n); boardRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: NODE_H }; });
+    const journeyRects: Record<string, Rect> = {};
+    (hasVariants ? unionNodes : ns).forEach((n) => { const p = eff(n); journeyRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: NODE_H }; });
 
     // diff vs the base (only meaningful when a variant is displayed)
-    const baseNodeById = new Map((baseBoard?.nodes ?? []).map((n) => [n.id, n]));
+    const baseNodeById = new Map((baseJourney?.nodes ?? []).map((n) => [n.id, n]));
     const activeIds = new Set(ns.map((n) => n.id));
     const nodeDiff = (n: ApiNode): 'new' | 'changed' | null => {
-      if (!board?.variantOf) return null;
+      if (!journey?.variantOf) return null;
       const b = baseNodeById.get(n.id);
       if (!b) return 'new';
-      const sig = (x: ApiNode) => JSON.stringify([x.type, x.board, x.port, x.label, x.status, x.note, x.contract, x.acceptance, x.refs]);
+      const sig = (x: ApiNode) => JSON.stringify([x.type, x.journey, x.port, x.label, x.status, x.note, x.contract, x.acceptance, x.refs]);
       return sig(n) !== sig(b) ? 'changed' : null;
     };
     // ghosts: union nodes/edges not in the displayed version, at low opacity
     const ghostNodes = hasVariants ? unionNodes.filter((n) => !activeIds.has(n.id)) : [];
-    const activeEdgeKeys = new Set((board?.edges ?? []).map((e) => `${e.from}>${e.to}`));
+    const activeEdgeKeys = new Set((journey?.edges ?? []).map((e) => `${e.from}>${e.to}`));
     const ghostEdges: EdgeTuple[] = hasVariants ? unionEdges.filter(([a, b]) => !activeEdgeKeys.has(`${a}>${b}`)) : [];
 
-    const boardNodes = ns.map((n) => {
+    const journeyNodes = ns.map((n) => {
       const isSel = n.id === this.state.selectedNodeId;
       const kind = nodeKind(n);
       const p = eff(n);
       const status = n.status ?? 'planned';
       return {
-        id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subBoard: n.board, diff: nodeDiff(n),
-        noteCount: boardId ? this.openNotesFor(boardId, n.id).length : 0,
+        id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subJourney: n.journey, diff: nodeDiff(n),
+        noteCount: journeyId ? this.openNotesFor(journeyId, n.id).length : 0,
         dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${status})`, flex: '0 0 auto' } as React.CSSProperties,
         style: { position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
         onMouseDown: (e: React.MouseEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
       };
     });
-    const boardDims = lay ? { w: Math.max(lay.w, 480), h: Math.max(lay.h, 360) } : { w: 480, h: 360 };
-    const boardEdgeTuples: EdgeTuple[] = (board?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
-    const boardEdgesEl = board ? edgesSvg(boardEdgeTuples, boardRects, boardDims, activeSet, this.state.selectedNodeId, (id) => this.selectNode(id), vertical) : null;
+    const journeyDims = lay ? { w: Math.max(lay.w, 480), h: Math.max(lay.h, 360) } : { w: 480, h: 360 };
+    const journeyEdgeTuples: EdgeTuple[] = (journey?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
+    const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.state.selectedNodeId, (id) => this.selectNode(id), vertical) : null;
 
     // crumbs
     const crumbBtn = (last: boolean): React.CSSProperties => ({ border: 'none', background: 'none', padding: '3px 6px', borderRadius: 5, color: last ? 'var(--fg)' : 'var(--dim)', fontWeight: last ? 600 : 500, fontSize: 12.5, cursor: last ? 'default' : 'pointer' });
@@ -757,7 +757,7 @@ export class App extends React.Component<AppProps, AppState> {
 
     // transport + detail
     const selNode = ns[selI];
-    const narration = selNode ? selNode.note ?? '' : board ? portsSummary(board) : '';
+    const narration = selNode ? selNode.note ?? '' : journey ? portsSummary(journey) : '';
     const stepLabel = ns.length ? `${(selI < 0 ? 1 : selI + 1)} / ${ns.length}` : '';
     const pct = ns.length ? Math.round(((selI < 0 ? 0 : selI + 1) / ns.length) * 100) : 0;
     const cont = this.continueTarget();
@@ -767,8 +767,8 @@ export class App extends React.Component<AppProps, AppState> {
     const selStatus = selNode?.status ?? 'planned';
     // honest rule: criteria read as verified only when the node is built (has tests)
     const chk = (_i: number) => selStatus === 'built';
-    const detailShown = isBoard && !!selNode && this.state.detailOpen;
-    const lensBlocked = isBoard && !!journeySet && !!topBoardId && !journeySet.has(topBoardId);
+    const detailShown = isJourney && !!selNode && this.state.detailOpen;
+    const lensBlocked = isJourney && !!personaSet && !!topJourneyId && !personaSet.has(topJourneyId);
 
     return (
       <div style={rootStyle as React.CSSProperties}>
@@ -778,18 +778,18 @@ export class App extends React.Component<AppProps, AppState> {
             <span style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>codestory</span>
             <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.state.data.manifest?.project ?? 'codestory present'}</span>
             {(this.state.data.issues?.length ?? 0) > 0 && (
-              <span title={this.state.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.state.data.issues!.length} validate issue(s) — boards may be missing</span>
+              <span title={this.state.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.state.data.issues!.length} validate issue(s) — journeys may be missing</span>
             )}
           </div>
 
           <div style={css('flex:1 1 auto;display:flex;justify-content:center;')}>
             {isMap && (
               <div style={css('position:relative;width:320px;max-width:42vw;')}>
-                <input value={this.state.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Search boards & nodes" style={css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;font-size:12.5px;outline:none;')} />
+                <input value={this.state.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Search journeys & nodes" style={css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;font-size:12.5px;outline:none;')} />
                 <span style={css('position:absolute;left:9px;top:7px;color:var(--mute);font-size:13px;')}>⌕</span>
               </div>
             )}
-            {isBoard && (
+            {isJourney && (
               <div style={css('display:flex;align-items:center;gap:2px;font-size:12.5px;')}>
                 {crumbs.map((c, i) => <button key={i} onClick={c.onClick} style={c.style}>{c.label}</button>)}
               </div>
@@ -818,20 +818,20 @@ export class App extends React.Component<AppProps, AppState> {
           <div style={css('position:absolute;right:12px;top:58px;z-index:30;width:340px;max-height:70vh;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;')}>
             <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
               <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Notes</div>
-              <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Click any node on a board to leave a change-note.</div>
+              <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Click any node on a journey to leave a change-note.</div>
             </div>
             <div style={css('flex:1 1 auto;overflow-y:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px;')}>
               {this.allNotes().length === 0 && (
                 <div style={css('padding:14px 6px;font-size:11.5px;color:var(--mute);text-align:center;')}>No notes yet.</div>
               )}
               {this.allNotes().map((n) => {
-                const nb = this.d().byId.get(n.board);
+                const nb = this.d().byId.get(n.journey);
                 const nn = n.node ? nb?.nodes.find((x) => x.id === n.node) : undefined;
                 const applied = n.status === 'applied';
                 return (
                   <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 9px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', opacity: applied ? 0.55 : 1 }}>
                     <div style={css('display:flex;align-items:center;gap:7px;')}>
-                      <button onClick={() => this.goToNote(n)} title="Go to node" style={css("border:none;background:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{nb?.title ?? n.board}{nn ? ` › ${nodeTitle(nn)}` : ''}</button>
+                      <button onClick={() => this.goToNote(n)} title="Go to node" style={css("border:none;background:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{nb?.title ?? n.journey}{nn ? ` › ${nodeTitle(nn)}` : ''}</button>
                       <span style={{ ...statusPill(applied ? 'built' : 'drifted'), marginLeft: 'auto', flex: '0 0 auto' }}>{n.status}</span>
                     </div>
                     <div style={{ fontSize: 12, lineHeight: 1.45, color: 'var(--fg)', textDecoration: applied ? 'line-through' : 'none' }}>{n.text}</div>
@@ -864,7 +864,7 @@ export class App extends React.Component<AppProps, AppState> {
                 <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Lens · reorders the journeys</div>
               </div>
               <div style={css('display:flex;flex-direction:column;gap:4px;')}>
-                {journeyList.map((j) => (
+                {personaList.map((j) => (
                   <button key={j.id} onClick={j.onClick} style={j.style}>
                     <span style={css('display:flex;align-items:center;gap:9px;')}>
                       <span style={j.dotStyle}></span>
@@ -878,18 +878,18 @@ export class App extends React.Component<AppProps, AppState> {
 
             <div>
               <div style={css('padding:0 4px 9px;')}>
-                <div style={css('font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>{jBoards ? `${journey!.title} path` : 'Journeys'}</div>
-                <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>{jBoards ? 'Steps in this persona’s flow' : 'Open a journey to inspect'}</div>
+                <div style={css('font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>{jJourneys ? `${persona!.title} path` : 'Journeys'}</div>
+                <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>{jJourneys ? 'Steps in this persona’s flow' : 'Open a journey to inspect'}</div>
               </div>
               <div style={css('display:flex;flex-direction:column;gap:2px;')}>
-                {/* Root is "selected" only when it's truly the whole map — view=map AND no journey lens; one active thing at a time */}
-                <button onClick={() => this.goCrumb(0)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !journey ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !journey ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                {/* Root is "selected" only when it's truly the whole map — view=map AND no persona lens; one active thing at a time */}
+                <button onClick={() => this.goCrumb(0)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !persona ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !persona ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                   <span style={css('display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:var(--accentSoft);color:var(--accent);font-size:11px;flex:0 0 auto;')}>⊞</span>
                   <span style={css('flex:1 1 auto;text-align:left;')}>{ROOT_LABEL}</span>
-                  <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap && !journey ? 'here' : 'root'}</span>
+                  <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap && !persona ? 'here' : 'root'}</span>
                 </button>
                 <div style={css('margin-left:9px;padding-left:2px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
-                  {railBoards.map((b) => railRow(b.id, b.id, b.inJ, b.badge, b.badgeStyle, new Set([b.id])))}
+                  {railJourneys.map((b) => railRow(b.id, b.id, b.inJ, b.badge, b.badgeStyle, new Set([b.id])))}
                 </div>
               </div>
             </div>
@@ -919,22 +919,22 @@ export class App extends React.Component<AppProps, AppState> {
               </div>
             )}
 
-            {isBoard && (
+            {isJourney && (
               <div style={css('flex:1 1 auto;display:flex;flex-direction:column;min-height:0;position:relative;animation:fadeZoom 220ms ease;')}>
                 {lensBlocked && (
                   <div style={css('position:absolute;inset:0;z-index:14;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);animation:panelUp 200ms ease;')}>
                     <div style={css('max-width:400px;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:26px 26px 22px;')}>
                       <div style={css('width:34px;height:34px;border-radius:9px;background:var(--accentSoft);border:1px solid var(--accent);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:15px;margin:0 auto 14px;')}>⦻</div>
-                      <div style={css('font-size:15.5px;font-weight:650;letter-spacing:-0.01em;')}>Not on the {journey?.title} path</div>
-                      <div style={css('font-size:12.5px;color:var(--dim);line-height:1.55;margin-top:8px;')}>The <b style={css('color:var(--fg);font-weight:600;')}>{journey?.title}</b> lens doesn’t pass through <b style={css('color:var(--fg);font-weight:600;')}>{board?.title}</b>. Pick a board this persona actually uses:</div>
+                      <div style={css('font-size:15.5px;font-weight:650;letter-spacing:-0.01em;')}>Not on the {persona?.title} path</div>
+                      <div style={css('font-size:12.5px;color:var(--dim);line-height:1.55;margin-top:8px;')}>The <b style={css('color:var(--fg);font-weight:600;')}>{persona?.title}</b> lens doesn’t pass through <b style={css('color:var(--fg);font-weight:600;')}>{journey?.title}</b>. Pick a journey this persona actually uses:</div>
                       <div style={css('display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px;')}>
-                        {(jBoards ?? []).map((id, i) => (
-                          <button key={id} onClick={() => this.enterBoard(id)} style={css('display:flex;align-items:center;gap:8px;height:34px;padding:0 13px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>
+                        {(jJourneys ?? []).map((id, i) => (
+                          <button key={id} onClick={() => this.enterJourney(id)} style={css('display:flex;align-items:center;gap:8px;height:34px;padding:0 13px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>
                             <span style={css("font-family:'JetBrains Mono',monospace;font-size:10px;opacity:0.85;")}>{i + 1}</span>{d.byId.get(id)?.title ?? id}
                           </button>
                         ))}
                       </div>
-                      <button onClick={() => this.setState({ journey: null })} style={css('margin-top:16px;border:none;background:none;color:var(--mute);font-size:11.5px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;')}>Clear lens instead</button>
+                      <button onClick={() => this.setState({ persona: null })} style={css('margin-top:16px;border:none;background:none;color:var(--mute);font-size:11.5px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;')}>Clear lens instead</button>
                     </div>
                   </div>
                 )}
@@ -946,7 +946,7 @@ export class App extends React.Component<AppProps, AppState> {
                         <input
                           type="radio"
                           name="cs-version"
-                          checked={boardId === v.id}
+                          checked={journeyId === v.id}
                           onChange={() => this.setVariant(baseEntryId, v.id)}
                           style={{ accentColor: 'var(--accent)', margin: 0, cursor: 'pointer' }}
                         />
@@ -959,14 +959,14 @@ export class App extends React.Component<AppProps, AppState> {
                 )}
                 <div style={css('flex:1 1 auto;position:relative;overflow:auto;background:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;')}>
                   <div style={css('position:absolute;left:16px;top:14px;z-index:5;')}>
-                    <div style={css('font-size:17px;font-weight:650;letter-spacing:-0.015em;')}>{board?.title}</div>
-                    <div style={css('font-size:12px;color:var(--dim);margin-top:2px;')}>{board ? portsSummary(board) : ''}</div>
+                    <div style={css('font-size:17px;font-weight:650;letter-spacing:-0.015em;')}>{journey?.title}</div>
+                    <div style={css('font-size:12px;color:var(--dim);margin-top:2px;')}>{journey ? portsSummary(journey) : ''}</div>
                   </div>
-                  <div ref={this.canvasEl} style={{ position: 'relative', width: boardDims.w, height: boardDims.h, margin: '64px 40px 40px' }}>
+                  <div ref={this.canvasEl} style={{ position: 'relative', width: journeyDims.w, height: journeyDims.h, margin: '64px 40px 40px' }}>
                     {ghostEdges.length > 0 && (
-                      <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, boardRects, boardDims, null, null, null, vertical)}</div>
+                      <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, journeyRects, journeyDims, null, null, null, vertical)}</div>
                     )}
-                    <div style={css('position:absolute;left:0;top:0;')}>{boardEdgesEl}</div>
+                    <div style={css('position:absolute;left:0;top:0;')}>{journeyEdgesEl}</div>
                     {ghostNodes.map((n) => {
                       const p = eff(n);
                       const kind = nodeKind(n);
@@ -979,7 +979,7 @@ export class App extends React.Component<AppProps, AppState> {
                         </div>
                       );
                     })}
-                    {boardNodes.map((n) => (
+                    {journeyNodes.map((n) => (
                       <div key={n.id} onMouseDown={n.onMouseDown} style={n.style}>
                         <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);display:flex;align-items:center;gap:5px;")}>{n.glyph}{n.typeText}</span>
@@ -997,29 +997,29 @@ export class App extends React.Component<AppProps, AppState> {
                         {n.isSubflow && (
                           <button
                             onMouseDown={(e) => e.stopPropagation()}
-                            onClick={(e) => { e.stopPropagation(); this.stepInto(n.subBoard!, n.id); }}
+                            onClick={(e) => { e.stopPropagation(); this.stepInto(n.subJourney!, n.id); }}
                             style={css('margin-top:7px;align-self:flex-start;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:5px;padding:2px 8px;display:flex;align-items:center;gap:4px;cursor:pointer;')}
                           >Step into ↘</button>
                         )}
                       </div>
                     ))}
-                    {this.state.notePopover && this.state.notePopover.board === boardId && boardRects[this.state.notePopover.node] && (
+                    {this.state.notePopover && this.state.notePopover.journey === journeyId && journeyRects[this.state.notePopover.node] && (
                       <div
                         onMouseDown={(e) => e.stopPropagation()}
-                        style={{ position: 'absolute', left: boardRects[this.state.notePopover.node]!.x, top: boardRects[this.state.notePopover.node]!.y + NODE_H + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
+                        style={{ position: 'absolute', left: journeyRects[this.state.notePopover.node]!.x, top: journeyRects[this.state.notePopover.node]!.y + NODE_H + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
                       >
                         <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.state.notePopover.node}</div>
                         <textarea
                           autoFocus
                           value={this.state.noteDraft}
                           onChange={(e) => this.setState({ noteDraft: e.target.value })}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.state.notePopover!.board, this.state.notePopover!.node, this.state.noteDraft); } if (e.key === 'Escape') this.setState({ notePopover: null }); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.node, this.state.noteDraft); } if (e.key === 'Escape') this.setState({ notePopover: null }); }}
                           placeholder="What should change here?"
                           style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: 12.5, fontFamily: 'inherit', outline: 'none' }}
                         />
                         <div style={css('display:flex;align-items:center;justify-content:flex-end;gap:7px;')}>
                           <button onClick={() => this.setState({ notePopover: null, noteDraft: '' })} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
-                          <button onClick={() => void this.saveNote(this.state.notePopover!.board, this.state.notePopover!.node, this.state.noteDraft)} disabled={!this.state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.state.noteDraft.trim() ? 'pointer' : 'default', opacity: this.state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
+                          <button onClick={() => void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.node, this.state.noteDraft)} disabled={!this.state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.state.noteDraft.trim() ? 'pointer' : 'default', opacity: this.state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
                         </div>
                       </div>
                     )}

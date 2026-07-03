@@ -32,25 +32,25 @@ function fileResponse(path: string): Response {
   return new Response(readFileSync(path), { headers });
 }
 
-/** Hono app: GET /api/boards + static viewer bundle with SPA fallback. */
+/** Hono app: GET /api/journeys + static viewer bundle with SPA fallback. */
 export function buildApp(codestoryDir: string, distDir: string = VIEWER_DIST): Hono {
   const app = new Hono();
   let watcher: DirWatcher | null = null; // created lazily on the first /api/events client
 
-  app.get('/api/boards', async (c) => {
+  app.get('/api/journeys', async (c) => {
     // re-read on every request: agent edits JSON, browser refresh shows it
     const r = await validateDir(codestoryDir);
-    return c.json({ manifest: r.manifest, boards: r.boards, issues: r.issues, notes: r.notes });
+    return c.json({ manifest: r.manifest, journeys: r.journeys, issues: r.issues, notes: r.notes });
   });
 
   // Annotations. One boring endpoint dispatches on body shape:
   //   { clear: true }        → remove every note
   //   { id, delete: true }   → remove one note
   //   { id, status }         → flip an existing note's status
-  //   { board, node?, text } → append a new note (boards stay read-only)
+  //   { journey, node?, text } → append a new note (journeys stay read-only)
   app.post('/api/notes', async (c) => {
     const body = (await c.req.json().catch(() => null)) as
-      | { id?: string; status?: string; delete?: boolean; clear?: boolean; board?: string; node?: string; text?: string }
+      | { id?: string; status?: string; delete?: boolean; clear?: boolean; journey?: string; node?: string; text?: string }
       | null;
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
 
@@ -70,18 +70,18 @@ export function buildApp(codestoryDir: string, distDir: string = VIEWER_DIST): H
       return c.json(updated);
     }
 
-    const { board, node, text } = body;
-    if (typeof board !== 'string' || !board) return c.json({ error: 'board is required' }, 400);
+    const { journey, node, text } = body;
+    if (typeof journey !== 'string' || !journey) return c.json({ error: 'journey is required' }, 400);
     if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
     if (node !== undefined && typeof node !== 'string') return c.json({ error: 'node must be a string' }, 400);
 
-    // validate ids against the loaded boards — never write a note that dangles
-    const { boards } = await validateDir(codestoryDir);
-    const target = boards.find((b) => b.id === board);
-    if (!target) return c.json({ error: `unknown board '${board}'` }, 400);
-    if (node && !target.nodes.some((n) => n.id === node)) return c.json({ error: `unknown node '${node}' on board '${board}'` }, 400);
+    // validate ids against the loaded journeys — never write a note that dangles
+    const { journeys } = await validateDir(codestoryDir);
+    const target = journeys.find((b) => b.id === journey);
+    if (!target) return c.json({ error: `unknown journey '${journey}'` }, 400);
+    if (node && !target.nodes.some((n) => n.id === node)) return c.json({ error: `unknown node '${node}' on journey '${journey}'` }, 400);
 
-    const note = appendNote(codestoryDir, { board, ...(node ? { node } : {}), text });
+    const note = appendNote(codestoryDir, { journey, ...(node ? { node } : {}), text });
     return c.json(note);
   });
 
@@ -120,7 +120,7 @@ export function buildApp(codestoryDir: string, distDir: string = VIEWER_DIST): H
 }
 
 export const presentCommand = defineCommand({
-  meta: { name: 'present', description: 'Serve the viewer + board data locally and open the browser' },
+  meta: { name: 'present', description: 'Serve the viewer + journey data locally and open the browser' },
   args: {
     dir: { type: 'string', description: 'Path to the .codestory directory', default: '.codestory' },
     port: { type: 'string', description: 'Port to listen on', default: '4747' },
@@ -134,7 +134,7 @@ export const presentCommand = defineCommand({
     // loopback only — this serves repo internals; LAN exposure is share-layer (v2) scope
     serve({ fetch: buildApp(dir).fetch, port, hostname: '127.0.0.1' });
     const url = `http://localhost:${port}`;
-    console.log(`codestory present → ${url}  (${r.boards.length} boards)`);
+    console.log(`codestory present → ${url}  (${r.journeys.length} journeys)`);
     if (!args['no-open']) openBrowser(url);
   },
 });

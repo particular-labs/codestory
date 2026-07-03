@@ -12,14 +12,14 @@ describe('init scaffold', () => {
     scaffoldDir(dir, 'MyProject');
 
     expect(existsSync(join(dir, 'codestory.json'))).toBe(true);
-    expect(existsSync(join(dir, 'example.board.json'))).toBe(true);
+    expect(existsSync(join(dir, 'example.journey.json'))).toBe(true);
 
     const r = await validateDir(dir);
     expect(r.issues).toEqual([]);
     expect(r.ok).toBe(true);
     expect(r.manifest?.project).toBe('MyProject');
-    expect(r.manifest?.journeys).toHaveLength(1);
-    expect(r.boards).toHaveLength(1);
-    expect(r.boards[0]?.id).toBe('example');
+    expect(r.manifest?.personas).toHaveLength(1);
+    expect(r.journeys).toHaveLength(1);
+    expect(r.journeys[0]?.id).toBe('example');
   });
 });

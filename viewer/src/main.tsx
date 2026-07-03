@@ -13,14 +13,14 @@ const props = {
   flowDirection: loadSetting('flow', P.get('flow'), ['horizontal', 'vertical'], 'horizontal') as 'horizontal' | 'vertical',
 };
 
-fetch('/api/boards')
+fetch('/api/journeys')
   .then((r) => {
-    if (!r.ok) throw new Error(`GET /api/boards → ${r.status}`);
+    if (!r.ok) throw new Error(`GET /api/journeys → ${r.status}`);
     return r.json() as Promise<ApiData>;
   })
   .then((data) => root.render(<App data={data} {...props} />))
   .catch((e) => root.render(
     <pre style={{ padding: 24, fontFamily: 'monospace' }}>
-      failed to load boards: {String(e)}{'\n'}is `codestory present` running?
+      failed to load journeys: {String(e)}{'\n'}is `codestory present` running?
     </pre>,
   ));

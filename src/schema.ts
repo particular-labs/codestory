@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // SSOT: Keel KB #182 "Codestory v1 Spec" — schema section. Keys stay boring
-// (nodes/edges/entries/exits/links/journeys) for agent/stranger parseability.
+// (nodes/edges/entries/exits/links/personas) for agent/stranger parseability.
 
 export const StatusSchema = z.enum(['planned', 'built', 'drifted']);
 export type Status = z.infer<typeof StatusSchema>;
@@ -29,8 +29,8 @@ export const NodeSchema = z
     tests: z.array(z.string()).optional(),
     ticket: z.string().optional(),
     ui: z.string().optional(),
-    board: z.string().optional(), // sub-flow: separate board file, never inlined
-    with: z.record(z.string(), z.unknown()).optional(), // args passed into sub-board
+    journey: z.string().optional(), // sub-flow: separate journey file, never inlined
+    with: z.record(z.string(), z.unknown()).optional(), // args passed into sub-journey
     port: z.string().optional(), // exit nodes: which declared exit this is
   })
   .superRefine((n, ctx) => {
@@ -53,18 +53,18 @@ export type Edge = z.infer<typeof EdgeSchema>;
 
 export const LinkSchema = z.strictObject({
   exit: z.string(),
-  board: z.string(),
+  journey: z.string(),
   entry: z.string(),
 });
 export type Link = z.infer<typeof LinkSchema>;
 
-export const BoardSchema = z.strictObject({
-  $schema: z.literal('codestory/board.v0'),
+export const JourneySchema = z.strictObject({
+  $schema: z.literal('codestory/journey.v0'),
   version: z.number().int(), // bump on structural change
   id: z.string().min(1),
   title: z.string().min(1),
   status: StatusSchema.default('planned'),
-  // variant boards: a full alternate take on `variantOf`, same entries/exits
+  // variant journeys: a full alternate take on `variantOf`, same entries/exits
   // (ports are the contract — callers always link to the base id)
   variantOf: z.string().min(1).optional(),
   variantLabel: z.string().optional(),
@@ -77,35 +77,35 @@ export const BoardSchema = z.strictObject({
   edges: z.array(EdgeSchema).default([]),
   links: z.array(LinkSchema).default([]),
 });
-export type Board = z.infer<typeof BoardSchema>;
+export type Journey = z.infer<typeof JourneySchema>;
 
-export const JourneySchema = z.strictObject({
+export const PersonaSchema = z.strictObject({
   id: z.string().min(1),
   title: z.string().min(1),
   persona: z.string().optional(),
-  start: z.strictObject({ board: z.string(), entry: z.string() }),
-  boards: z.array(z.string()),
+  start: z.strictObject({ journey: z.string(), entry: z.string() }),
+  journeys: z.array(z.string()),
 });
-export type Journey = z.infer<typeof JourneySchema>;
+export type Persona = z.infer<typeof PersonaSchema>;
 
 export const ManifestSchema = z.strictObject({
   $schema: z.literal('codestory/manifest.v0'),
   version: z.number().int(),
   project: z.string().min(1),
-  journeys: z.array(JourneySchema).default([]), // journeys = named entry lenses; no single root
+  personas: z.array(PersonaSchema).default([]), // personas = named entry lenses; no single root
 });
 export type Manifest = z.infer<typeof ManifestSchema>;
 
-// Annotations layer: reviewers drop change-notes against boards/nodes in the
+// Annotations layer: reviewers drop change-notes against journeys/nodes in the
 // viewer; agents read them, apply the change, flip them applied. Notes ALWAYS
-// live in the sidecar `.codestory/notes.json`, never inside board files.
+// live in the sidecar `.codestory/notes.json`, never inside journey files.
 export const NoteStatusSchema = z.enum(['open', 'applied']);
 export type NoteStatus = z.infer<typeof NoteStatusSchema>;
 
 export const NoteSchema = z.strictObject({
   id: z.string().min(1),
-  board: z.string().min(1), // must reference an existing board id (base or variant)
-  node: z.string().min(1).optional(), // if set, must exist on that board
+  journey: z.string().min(1), // must reference an existing journey id (base or variant)
+  node: z.string().min(1).optional(), // if set, must exist on that journey
   text: z.string().min(1),
   status: NoteStatusSchema.default('open'),
   createdAt: z.string(), // ISO 8601

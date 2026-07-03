@@ -13,7 +13,7 @@ const SKILL_SRC = resolve(fileURLToPath(import.meta.url), '..', '..', 'assets', 
 // Any line already mentioning this path counts as an existing pointer.
 const POINTER_MATCH = '.claude/skills/codestory';
 const POINTER_LINE =
-  '- **codestory** (`.claude/skills/codestory/SKILL.md`) — maintain flow boards; board-first, capture flows, apply codestory notes.';
+  '- **codestory** (`.claude/skills/codestory/SKILL.md`) — maintain flow journeys; journey-first, capture flows, apply codestory notes.';
 
 export interface InstallResult {
   /** Directory the skill was copied into. */

@@ -11,10 +11,10 @@ function fixtureRepo(): string {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'codestory.json'), JSON.stringify({
     $schema: 'codestory/manifest.v0', version: 1, project: 'Demo',
-    journeys: [{ id: 'ops', title: 'Ops', start: { board: 'alpha', entry: 'start' }, boards: ['alpha'] }],
+    personas: [{ id: 'ops', title: 'Ops', start: { journey: 'alpha', entry: 'start' }, journeys: ['alpha'] }],
   }));
-  writeFileSync(join(dir, 'alpha.board.json'), JSON.stringify({
-    $schema: 'codestory/board.v0', version: 1, id: 'alpha', title: 'Alpha',
+  writeFileSync(join(dir, 'alpha.journey.json'), JSON.stringify({
+    $schema: 'codestory/journey.v0', version: 1, id: 'alpha', title: 'Alpha',
     entries: ['start'], nodes: [{ id: 'a', type: 'step', label: 'A' }],
   }));
   return dir;
@@ -29,14 +29,14 @@ function fakeDist(): string {
 }
 
 describe('present app', () => {
-  test('GET /api/boards returns manifest + boards', async () => {
+  test('GET /api/journeys returns manifest + journeys', async () => {
     const app = buildApp(fixtureRepo(), fakeDist());
-    const res = await app.request('/api/boards');
+    const res = await app.request('/api/journeys');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { manifest: { project: string }; boards: Array<{ id: string }> };
+    const body = (await res.json()) as { manifest: { project: string }; journeys: Array<{ id: string }> };
     expect(body.manifest.project).toBe('Demo');
-    expect(body.boards).toHaveLength(1);
-    expect(body.boards[0]?.id).toBe('alpha');
+    expect(body.journeys).toHaveLength(1);
+    expect(body.journeys[0]?.id).toBe('alpha');
   });
 
   test('serves index.html at / and assets by path', async () => {
@@ -69,7 +69,7 @@ describe('present app', () => {
     const app = buildApp(fixtureRepo(), join(tmpdir(), 'codestory-nonexistent-dist'));
     const home = await app.request('/');
     expect(await home.text()).toContain('bun run build:viewer');
-    const api = await app.request('/api/boards');
+    const api = await app.request('/api/journeys');
     expect(api.status).toBe(200);
   });
 });
@@ -78,18 +78,18 @@ const postJson = (body: unknown) =>
   new Request('http://x/api/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 describe('notes API', () => {
-  test('GET /api/boards includes notes ([] when no notes.json)', async () => {
+  test('GET /api/journeys includes notes ([] when no notes.json)', async () => {
     const app = buildApp(fixtureRepo(), fakeDist());
-    const body = (await (await app.request('/api/boards')).json()) as { notes: unknown[] };
+    const body = (await (await app.request('/api/journeys')).json()) as { notes: unknown[] };
     expect(body.notes).toEqual([]);
   });
 
   test('POST creates a note, persists notes.json, GET returns it', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    const res = await app.request(postJson({ board: 'alpha', node: 'a', text: 'tighten this' }));
+    const res = await app.request(postJson({ journey: 'alpha', node: 'a', text: 'tighten this' }));
     expect(res.status).toBe(200);
-    const note = (await res.json()) as { id: string; status: string; board: string; node?: string; createdAt: string };
+    const note = (await res.json()) as { id: string; status: string; journey: string; node?: string; createdAt: string };
     expect(note.id).toBeTruthy();
     expect(note.status).toBe('open');
     expect(note.node).toBe('a');
@@ -100,27 +100,27 @@ describe('notes API', () => {
     expect(persisted.$schema).toBe('codestory/notes.v0');
     expect(persisted.notes).toHaveLength(1);
 
-    const boards = (await (await app.request('/api/boards')).json()) as { notes: Array<{ id: string }> };
-    expect(boards.notes).toHaveLength(1);
-    expect(boards.notes[0]?.id).toBe(note.id);
+    const journeys = (await (await app.request('/api/journeys')).json()) as { notes: Array<{ id: string }> };
+    expect(journeys.notes).toHaveLength(1);
+    expect(journeys.notes[0]?.id).toBe(note.id);
 
     // notes.json written by the API stays valid
     const v = await validateDir(dir);
     expect(v.ok).toBe(true);
   });
 
-  test('POST 400s on unknown board or node', async () => {
+  test('POST 400s on unknown journey or node', async () => {
     const app = buildApp(fixtureRepo(), fakeDist());
-    expect((await app.request(postJson({ board: 'ghost', text: 'x' }))).status).toBe(400);
-    expect((await app.request(postJson({ board: 'alpha', node: 'nope', text: 'x' }))).status).toBe(400);
-    expect((await app.request(postJson({ board: 'alpha', text: '' }))).status).toBe(400);
-    expect((await app.request(postJson({ text: 'no board' }))).status).toBe(400);
+    expect((await app.request(postJson({ journey: 'ghost', text: 'x' }))).status).toBe(400);
+    expect((await app.request(postJson({ journey: 'alpha', node: 'nope', text: 'x' }))).status).toBe(400);
+    expect((await app.request(postJson({ journey: 'alpha', text: '' }))).status).toBe(400);
+    expect((await app.request(postJson({ text: 'no journey' }))).status).toBe(400);
   });
 
   test('POST with { id, status } flips status and persists', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    const note = (await (await app.request(postJson({ board: 'alpha', node: 'a', text: 'do it' }))).json()) as { id: string };
+    const note = (await (await app.request(postJson({ journey: 'alpha', node: 'a', text: 'do it' }))).json()) as { id: string };
 
     const res = await app.request(postJson({ id: note.id, status: 'applied' }));
     expect(res.status).toBe(200);
@@ -139,7 +139,7 @@ describe('notes API', () => {
   test('POST with { id, delete } removes the note and persists', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    const note = (await (await app.request(postJson({ board: 'alpha', node: 'a', text: 'scrap this' }))).json()) as { id: string };
+    const note = (await (await app.request(postJson({ journey: 'alpha', node: 'a', text: 'scrap this' }))).json()) as { id: string };
 
     const res = await app.request(postJson({ id: note.id, delete: true }));
     expect(res.status).toBe(200);
@@ -152,8 +152,8 @@ describe('notes API', () => {
   test('POST with { clear } empties all notes', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    await app.request(postJson({ board: 'alpha', node: 'a', text: 'one' }));
-    await app.request(postJson({ board: 'alpha', text: 'two' }));
+    await app.request(postJson({ journey: 'alpha', node: 'a', text: 'one' }));
+    await app.request(postJson({ journey: 'alpha', text: 'two' }));
 
     const res = await app.request(postJson({ clear: true }));
     expect(res.status).toBe(200);

@@ -35,11 +35,11 @@ function atomicWrite(dir: string, file: NotesFile): void {
   renameSync(tmp, path);
 }
 
-export function appendNote(dir: string, input: { board: string; node?: string; text: string }): Note {
+export function appendNote(dir: string, input: { journey: string; node?: string; text: string }): Note {
   const file = loadForWrite(dir);
   const note: Note = {
     id: randomUUID(),
-    board: input.board,
+    journey: input.journey,
     ...(input.node ? { node: input.node } : {}),
     text: input.text,
     status: 'open',

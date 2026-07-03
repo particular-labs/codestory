@@ -20,12 +20,12 @@ const validate = defineCommand({
       console.error(`\ncodestory validate: ${result.issues.length} issue(s)`);
       process.exit(1);
     }
-    console.log(`✓ ${result.boards.length} board(s), ${result.manifest?.journeys.length ?? 0} journey(s) — all checks pass`);
+    console.log(`✓ ${result.journeys.length} journey(s), ${result.manifest?.personas.length ?? 0} persona(s) — all checks pass`);
   },
 });
 
 const main = defineCommand({
-  meta: { name: 'codestory', version, description: 'Living storyboards for codebases' },
+  meta: { name: 'codestory', version, description: 'Living storyjourneys for codebases' },
   subCommands: {
     init: initCommand,
     validate,
