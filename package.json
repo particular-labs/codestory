@@ -23,7 +23,7 @@
   "bin": {
     "codestory": "./dist/cli.js"
   },
-  "files": ["dist", "viewer/dist"],
+  "files": ["dist", "viewer/dist", "assets/skill"],
   "scripts": {
     "test": "bun test",
     "build": "bun build src/cli.ts --outdir dist --target node",
