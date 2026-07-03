@@ -476,7 +476,11 @@ export class App extends React.Component<AppProps, AppState> {
     const dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: t.bg, style: style as React.CSSProperties as Record<string, string> });
     const a = document.createElement('a');
     a.href = dataUrl;
-    a.download = `${this.curEntry()?.id ?? 'chain-map'}.png`;
+    const board = this.curBoard();
+    const name = board
+      ? `${board.title}${board.variantOf && board.variantLabel ? ` — ${board.variantLabel}` : ''}`
+      : `${this.props.data.manifest?.project ?? 'codestory'} — Root`;
+    a.download = `${name.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
     a.click();
   }
   toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSetting('flow', flow); return { flow }; }); }
