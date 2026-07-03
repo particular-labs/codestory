@@ -50,7 +50,7 @@ export function installSkill(cwd: string, opts: { global?: boolean; home?: strin
   return { target, claudeMd, pointerAppended };
 }
 
-export const skillInstallCommand = defineCommand({
+const skillInstallCommand = defineCommand({
   meta: { name: 'install', description: 'Install the codestory Claude Code skill into .claude/skills/' },
   args: {
     global: {
