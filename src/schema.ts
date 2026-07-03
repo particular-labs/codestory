@@ -1,0 +1,93 @@
+import { z } from 'zod';
+
+// SSOT: Keel KB #182 "Codestory v1 Spec" — schema section. Keys stay boring
+// (nodes/edges/entries/exits/links/journeys) for agent/stranger parseability.
+
+export const StatusSchema = z.enum(['planned', 'built', 'drifted']);
+export type Status = z.infer<typeof StatusSchema>;
+
+export const NodeTypeSchema = z.enum(['step', 'decision', 'exit']);
+export type NodeType = z.infer<typeof NodeTypeSchema>;
+
+// All spec-grade node fields optional except id/type/label — except exit
+// nodes, whose label is optional (KB example: { id, type: "exit", port }) and
+// whose port is required.
+export const NodeSchema = z
+  .strictObject({
+    id: z.string().min(1),
+    type: NodeTypeSchema,
+    label: z.string().min(1).optional(),
+    note: z.string().optional(),
+    refs: z.array(z.string()).optional(),
+    contract: z.strictObject({ in: z.string().optional(), out: z.string().optional() }).optional(),
+    acceptance: z.array(z.string()).optional(),
+    data: z.array(z.string()).optional(),
+    actors: z.array(z.string()).optional(),
+    effects: z.array(z.string()).optional(),
+    errors: z.array(z.strictObject({ to: z.string(), when: z.string().optional() })).optional(),
+    status: StatusSchema.optional(),
+    tests: z.array(z.string()).optional(),
+    ticket: z.string().optional(),
+    ui: z.string().optional(),
+    board: z.string().optional(), // sub-flow: separate board file, never inlined
+    with: z.record(z.string(), z.unknown()).optional(), // args passed into sub-board
+    port: z.string().optional(), // exit nodes: which declared exit this is
+  })
+  .superRefine((n, ctx) => {
+    if (n.type === 'exit' && !n.port) {
+      ctx.addIssue({ code: 'custom', path: ['port'], message: 'exit node requires a port' });
+    }
+    if (n.type !== 'exit' && !n.label) {
+      ctx.addIssue({ code: 'custom', path: ['label'], message: 'node requires a label' });
+    }
+  });
+export type Node = z.infer<typeof NodeSchema>;
+
+export const EdgeSchema = z.strictObject({
+  from: z.string(),
+  to: z.string(),
+  label: z.string().optional(),
+  when: z.string().optional(), // freeform v0
+});
+export type Edge = z.infer<typeof EdgeSchema>;
+
+export const LinkSchema = z.strictObject({
+  exit: z.string(),
+  board: z.string(),
+  entry: z.string(),
+});
+export type Link = z.infer<typeof LinkSchema>;
+
+export const BoardSchema = z.strictObject({
+  $schema: z.literal('codestory/board.v0'),
+  version: z.number().int(), // bump on structural change
+  id: z.string().min(1),
+  title: z.string().min(1),
+  status: StatusSchema.default('planned'),
+  owner: z.string().optional(),
+  docs: z.array(z.string()).optional(),
+  nonGoals: z.array(z.string()).optional(),
+  entries: z.array(z.string()).default([]),
+  exits: z.array(z.string()).default([]),
+  nodes: z.array(NodeSchema),
+  edges: z.array(EdgeSchema).default([]),
+  links: z.array(LinkSchema).default([]),
+});
+export type Board = z.infer<typeof BoardSchema>;
+
+export const JourneySchema = z.strictObject({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  persona: z.string().optional(),
+  start: z.strictObject({ board: z.string(), entry: z.string() }),
+  boards: z.array(z.string()),
+});
+export type Journey = z.infer<typeof JourneySchema>;
+
+export const ManifestSchema = z.strictObject({
+  $schema: z.literal('codestory/manifest.v0'),
+  version: z.number().int(),
+  project: z.string().min(1),
+  journeys: z.array(JourneySchema).default([]), // journeys = named entry lenses; no single root
+});
+export type Manifest = z.infer<typeof ManifestSchema>;
