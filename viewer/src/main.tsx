@@ -1,15 +1,16 @@
 import { createRoot } from 'react-dom/client';
 import { App, type ApiData } from './app';
+import { loadSetting } from './settings';
 
 const root = createRoot(document.getElementById('root')!);
 
-// design props (Appearance/Layout) exposed as URL params:
-// ?theme=light&accent=%233ecf8e&flow=vertical
+// theme + flow are persisted settings; a URL param (?theme=light&flow=vertical)
+// overrides for the visit without overwriting the saved preference
 const P = new URLSearchParams(location.search);
 const props = {
-  defaultTheme: (P.get('theme') === 'light' ? 'light' : 'dark') as 'dark' | 'light',
+  defaultTheme: loadSetting('theme', P.get('theme'), ['dark', 'light'], 'dark') as 'dark' | 'light',
   accent: P.get('accent') ?? '',
-  flowDirection: (P.get('flow') === 'vertical' ? 'vertical' : 'horizontal') as 'horizontal' | 'vertical',
+  flowDirection: loadSetting('flow', P.get('flow'), ['horizontal', 'vertical'], 'horizontal') as 'horizontal' | 'vertical',
 };
 
 fetch('/api/boards')

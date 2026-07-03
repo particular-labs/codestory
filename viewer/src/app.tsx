@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { saveSetting } from './settings';
 
 // ── API projection (viewer-local; SSOT is src/schema.ts, this is read-only) ──
 
@@ -217,6 +218,7 @@ interface AppState {
   nodePos: Record<string, { x: number; y: number }>;
   mapPos: Record<string, { x: number; y: number }>;
   variantSel: Record<string, string>; // base board id → selected version's board id
+  flow: 'horizontal' | 'vertical'; // SSOT for flow direction — every layout/edge/port reads this
 }
 
 const nodeKind = (n: ApiNode) => (n.board ? 'subflow' : n.type);
@@ -227,7 +229,7 @@ const portsSummary = (b: ApiBoard) =>
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
     super(props);
-    this.state = { theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {} };
+    this.state = { theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection };
   }
 
   private _d: { byId: Map<string, ApiBoard>; order: string[]; chainEdges: EdgeTuple[]; journeys: ApiJourney[]; variantsByBase: Map<string, ApiBoard[]> } | null = null;
@@ -308,7 +310,8 @@ export class App extends React.Component<AppProps, AppState> {
   }
   selectNode(id: string) { this.setState({ selectedNodeId: id }); }
   setJourney(id: string) { this.setState((s) => ({ journey: s.journey === id ? null : id })); }
-  toggleTheme() { this.setState((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })); }
+  toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSetting('theme', theme); return { theme }; }); }
+  toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSetting('flow', flow); return { flow }; }); }
 
   step(dir: number) {
     const ns = this.nodes();
@@ -383,7 +386,7 @@ export class App extends React.Component<AppProps, AppState> {
     const d = this.d();
     const isMap = this.state.view === 'map';
     const isBoard = this.state.view === 'board';
-    const vertical = this.props.flowDirection === 'vertical';
+    const vertical = this.state.flow === 'vertical';
     const topBoardId = this.state.stack[0]?.id ?? null;
     const journey = this.state.journey ? d.journeys.find((j) => j.id === this.state.journey) ?? null : null;
     const journeySet = journey ? new Set(journey.boards) : null;
@@ -585,6 +588,7 @@ export class App extends React.Component<AppProps, AppState> {
               <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--built);')}></span>built</span>
               <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
             </div>
+            <button title={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? '⇅' : '⇄'}</button>
             <button onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? '☀' : '☾'}</button>
           </div>
         </div>
