@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/present';
+import { validateDir } from '../src/validate';
 
 function fixtureRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'codestory-present-'));
@@ -68,5 +69,76 @@ describe('present app', () => {
     expect(await home.text()).toContain('bun run build:viewer');
     const api = await app.request('/api/boards');
     expect(api.status).toBe(200);
+  });
+});
+
+const postJson = (body: unknown) =>
+  new Request('http://x/api/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+describe('notes API', () => {
+  test('GET /api/boards includes notes ([] when no notes.json)', async () => {
+    const app = buildApp(fixtureRepo(), fakeDist());
+    const body = (await (await app.request('/api/boards')).json()) as { notes: unknown[] };
+    expect(body.notes).toEqual([]);
+  });
+
+  test('POST creates a note, persists notes.json, GET returns it', async () => {
+    const dir = fixtureRepo();
+    const app = buildApp(dir, fakeDist());
+    const res = await app.request(postJson({ board: 'alpha', node: 'a', text: 'tighten this' }));
+    expect(res.status).toBe(200);
+    const note = (await res.json()) as { id: string; status: string; board: string; node?: string; createdAt: string };
+    expect(note.id).toBeTruthy();
+    expect(note.status).toBe('open');
+    expect(note.node).toBe('a');
+    expect(note.createdAt).toMatch(/\dT\d/); // ISO-ish
+
+    expect(existsSync(join(dir, 'notes.json'))).toBe(true);
+    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    expect(persisted.$schema).toBe('codestory/notes.v0');
+    expect(persisted.notes).toHaveLength(1);
+
+    const boards = (await (await app.request('/api/boards')).json()) as { notes: Array<{ id: string }> };
+    expect(boards.notes).toHaveLength(1);
+    expect(boards.notes[0]?.id).toBe(note.id);
+
+    // notes.json written by the API stays valid
+    const v = await validateDir(dir);
+    expect(v.ok).toBe(true);
+  });
+
+  test('POST 400s on unknown board or node', async () => {
+    const app = buildApp(fixtureRepo(), fakeDist());
+    expect((await app.request(postJson({ board: 'ghost', text: 'x' }))).status).toBe(400);
+    expect((await app.request(postJson({ board: 'alpha', node: 'nope', text: 'x' }))).status).toBe(400);
+    expect((await app.request(postJson({ board: 'alpha', text: '' }))).status).toBe(400);
+    expect((await app.request(postJson({ text: 'no board' }))).status).toBe(400);
+  });
+
+  test('POST with { id, status } flips status and persists', async () => {
+    const dir = fixtureRepo();
+    const app = buildApp(dir, fakeDist());
+    const note = (await (await app.request(postJson({ board: 'alpha', node: 'a', text: 'do it' }))).json()) as { id: string };
+
+    const res = await app.request(postJson({ id: note.id, status: 'applied' }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe('applied');
+
+    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    expect(persisted.notes[0].status).toBe('applied');
+  });
+
+  test('POST status flip 404s on unknown id', async () => {
+    const app = buildApp(fixtureRepo(), fakeDist());
+    const res = await app.request(postJson({ id: 'does-not-exist', status: 'applied' }));
+    expect(res.status).toBe(404);
+  });
+
+  test('GET /api/events is an SSE stream', async () => {
+    const app = buildApp(fixtureRepo(), fakeDist());
+    const res = await app.request('/api/events');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    await res.body?.cancel(); // don't leave the stream open
   });
 });

@@ -1,11 +1,14 @@
 import { serve } from '@hono/node-server';
 import { defineCommand } from 'citty';
 import { Hono } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appendNote, setNoteStatus } from './notes';
 import { validateDir } from './validate';
+import { watchDir, type DirWatcher } from './watch';
 
 const VIEWER_DIST = resolve(fileURLToPath(import.meta.url), '..', '..', 'viewer', 'dist');
 
@@ -28,11 +31,56 @@ function fileResponse(path: string): Response {
 /** Hono app: GET /api/boards + static viewer bundle with SPA fallback. */
 export function buildApp(codestoryDir: string, distDir: string = VIEWER_DIST): Hono {
   const app = new Hono();
+  let watcher: DirWatcher | null = null; // created lazily on the first /api/events client
 
   app.get('/api/boards', async (c) => {
     // re-read on every request: agent edits JSON, browser refresh shows it
     const r = await validateDir(codestoryDir);
-    return c.json({ manifest: r.manifest, boards: r.boards, issues: r.issues });
+    return c.json({ manifest: r.manifest, boards: r.boards, issues: r.issues, notes: r.notes });
+  });
+
+  // Annotations. One boring endpoint dispatches on body shape:
+  //   { id, status }         → flip an existing note's status
+  //   { board, node?, text } → append a new note (boards stay read-only)
+  app.post('/api/notes', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as
+      | { id?: string; status?: string; board?: string; node?: string; text?: string }
+      | null;
+    if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+
+    if (typeof body.id === 'string') {
+      if (body.status !== 'open' && body.status !== 'applied') return c.json({ error: 'status must be open|applied' }, 400);
+      const updated = setNoteStatus(codestoryDir, body.id, body.status);
+      if (!updated) return c.json({ error: `no note with id '${body.id}'` }, 404);
+      return c.json(updated);
+    }
+
+    const { board, node, text } = body;
+    if (typeof board !== 'string' || !board) return c.json({ error: 'board is required' }, 400);
+    if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
+    if (node !== undefined && typeof node !== 'string') return c.json({ error: 'node must be a string' }, 400);
+
+    // validate ids against the loaded boards — never write a note that dangles
+    const { boards } = await validateDir(codestoryDir);
+    const target = boards.find((b) => b.id === board);
+    if (!target) return c.json({ error: `unknown board '${board}'` }, 400);
+    if (node && !target.nodes.some((n) => n.id === node)) return c.json({ error: `unknown node '${node}' on board '${board}'` }, 400);
+
+    const note = appendNote(codestoryDir, { board, ...(node ? { node } : {}), text });
+    return c.json(note);
+  });
+
+  // Live reload: SSE stream, one shared directory watcher created on first client.
+  app.get('/api/events', (c) => {
+    watcher ??= watchDir(codestoryDir);
+    const w = watcher;
+    return streamSSE(c, async (stream) => {
+      const unsub = w.subscribe(() => { void stream.writeSSE({ event: 'reload', data: '1' }); });
+      stream.onAbort(unsub);
+      await stream.writeSSE({ event: 'ready', data: '1' });
+      while (!stream.aborted) await stream.sleep(30_000);
+      unsub();
+    });
   });
 
   app.get('*', (c) => {
