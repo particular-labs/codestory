@@ -210,6 +210,28 @@ describe('validateDir', () => {
     expect(r.issues.some((i) => i.message.match(/exits.*match base/))).toBe(true);
   });
 
+  test('links, sub-board refs, and journeys must target base boards, not variants', async () => {
+    const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha' };
+    const withVariant = { ...good, '.codestory/alpha@v2.board.json': variant };
+
+    const badLink = { ...beta, entries: ['start'], exits: ['out'], nodes: [...(beta.nodes as unknown[]), { id: 'x', type: 'exit', port: 'out' }], links: [{ exit: 'out', board: 'alpha@v2', entry: 'start' }] };
+    const r1 = await issuesOf({ ...withVariant, '.codestory/beta.board.json': badLink });
+    expect(r1.issues.some((i) => i.message.match(/base board/))).toBe(true);
+
+    const badSub = { ...beta, nodes: [{ id: 'b', type: 'step', label: 'B', board: 'alpha@v2' }] };
+    const r2 = await issuesOf({ ...withVariant, '.codestory/beta.board.json': badSub });
+    expect(r2.issues.some((i) => i.message.match(/base board/))).toBe(true);
+
+    const badJourney = { ...manifest, journeys: [{ id: 'j', title: 'J', start: { board: 'alpha@v2', entry: 'start' }, boards: ['alpha@v2'] }] };
+    const r3 = await issuesOf({ ...withVariant, '.codestory/codestory.json': badJourney });
+    expect(r3.issues.some((i) => i.message.match(/base board/))).toBe(true);
+  });
+
+  test('empty variantOf is rejected by schema', async () => {
+    const r = await issuesOf({ ...good, '.codestory/beta.board.json': { ...beta, variantOf: '' } });
+    expect(r.ok).toBe(false);
+  });
+
   test('variant of a variant is rejected', async () => {
     const v1 = { ...alpha, id: 'alpha@v1', variantOf: 'alpha' };
     const v2 = { ...alpha, id: 'alpha@v2', variantOf: 'alpha@v1' };

@@ -66,7 +66,7 @@ export const BoardSchema = z.strictObject({
   status: StatusSchema.default('planned'),
   // variant boards: a full alternate take on `variantOf`, same entries/exits
   // (ports are the contract — callers always link to the base id)
-  variantOf: z.string().optional(),
+  variantOf: z.string().min(1).optional(),
   variantLabel: z.string().optional(),
   owner: z.string().optional(),
   docs: z.array(z.string()).optional(),

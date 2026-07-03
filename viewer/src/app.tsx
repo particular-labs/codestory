@@ -287,21 +287,23 @@ export class App extends React.Component<AppProps, AppState> {
   setVariant(baseId: string, boardId: string) {
     this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: boardId }, selectedNodeId: this.firstNode(boardId) }));
   }
+  /** The board id actually displayed for a base id (its selected variant, else itself). */
+  displayedId(baseId: string) { return this.state.variantSel[baseId] ?? baseId; }
   nodes() { return this.curBoard()?.nodes ?? []; }
   selIndex() { return this.nodes().findIndex((n) => n.id === this.state.selectedNodeId); }
   firstNode(id: string) { return this.d().byId.get(id)?.nodes[0]?.id ?? null; }
 
-  enterBoard(id: string) { this.setState({ view: 'board', stack: [{ id }], selectedNodeId: this.firstNode(id) }); }
+  enterBoard(id: string) { this.setState({ view: 'board', stack: [{ id }], selectedNodeId: this.firstNode(this.displayedId(id)) }); }
   stepInto(subId: string, callerNode: string) {
     const cur = this.curEntry();
     if (!cur) return;
-    this.setState((s) => ({ stack: [...s.stack, { id: subId, callerBoard: cur.id, callerNode }], selectedNodeId: this.firstNode(subId) }));
+    this.setState((s) => ({ stack: [...s.stack, { id: subId, callerBoard: cur.id, callerNode }], selectedNodeId: this.firstNode(this.displayedId(subId)) }));
   }
   goCrumb(k: number) {
     if (k === 0) { this.setState({ view: 'map' }); return; }
     this.setState((s) => {
       const st = s.stack.slice(0, k);
-      return { stack: st, selectedNodeId: this.firstNode(st[st.length - 1]!.id) };
+      return { stack: st, selectedNodeId: this.firstNode(this.displayedId(st[st.length - 1]!.id)) };
     });
   }
   selectNode(id: string) { this.setState({ selectedNodeId: id }); }
@@ -316,12 +318,14 @@ export class App extends React.Component<AppProps, AppState> {
     const ni = Math.max(0, Math.min(ns.length - 1, i + dir));
     this.setState({ selectedNodeId: ns[ni]!.id });
   }
-  hop(nextId: string) { this.setState({ stack: [{ id: nextId }], selectedNodeId: this.firstNode(nextId) }); }
+  hop(nextId: string) { this.setState({ stack: [{ id: nextId }], selectedNodeId: this.firstNode(this.displayedId(nextId)) }); }
 
   returnToParent() {
     const e = this.curEntry();
     if (!e?.callerBoard || !e.callerNode) return;
-    const parent = this.d().byId.get(e.callerBoard);
+    // resolve the return edge against the parent's DISPLAYED version — a
+    // selected variant may route the caller node differently than the base
+    const parent = this.d().byId.get(this.displayedId(e.callerBoard));
     const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
     this.setState((s) => ({ stack: s.stack.slice(0, -1), selectedNodeId: returnEdge?.to ?? e.callerNode ?? null }));
   }
@@ -333,7 +337,7 @@ export class App extends React.Component<AppProps, AppState> {
     if (!cur || cur.type !== 'exit' || !board) return null;
     const e = this.curEntry();
     if (e?.callerBoard && e.callerNode) {
-      const parent = this.d().byId.get(e.callerBoard);
+      const parent = this.d().byId.get(this.displayedId(e.callerBoard));
       const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
       const returnNode = parent?.nodes.find((n) => n.id === returnEdge?.to);
       return { label: `Return → ${returnNode ? nodeTitle(returnNode) : parent?.title ?? 'parent'}`, onClick: () => this.returnToParent() };
@@ -501,7 +505,7 @@ export class App extends React.Component<AppProps, AppState> {
       if (!board?.variantOf) return null;
       const b = baseNodeById.get(n.id);
       if (!b) return 'new';
-      const sig = (x: ApiNode) => JSON.stringify([x.label, x.status, x.note, x.contract]);
+      const sig = (x: ApiNode) => JSON.stringify([x.type, x.board, x.port, x.label, x.status, x.note, x.contract, x.acceptance, x.refs]);
       return sig(n) !== sig(b) ? 'changed' : null;
     };
     // ghosts: union nodes/edges not in the displayed version, at low opacity
