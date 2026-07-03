@@ -15,6 +15,7 @@
     "cli": "bun run src/cli.ts"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.8",
     "citty": "^0.2.2",
     "hono": "^4.12.27",
     "zod": "^4.4.3"
