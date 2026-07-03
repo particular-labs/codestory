@@ -23,6 +23,8 @@ export interface ApiBoard {
   id: string;
   title: string;
   status: Status;
+  variantOf?: string;
+  variantLabel?: string;
   entries: string[];
   exits: string[];
   nodes: ApiNode[];
@@ -214,6 +216,7 @@ interface AppState {
   detailOpen: boolean;
   nodePos: Record<string, { x: number; y: number }>;
   mapPos: Record<string, { x: number; y: number }>;
+  variantSel: Record<string, string>; // base board id → selected version's board id
 }
 
 const nodeKind = (n: ApiNode) => (n.board ? 'subflow' : n.type);
@@ -224,18 +227,22 @@ const portsSummary = (b: ApiBoard) =>
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
     super(props);
-    this.state = { theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {} };
+    this.state = { theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {} };
   }
 
-  private _d: { byId: Map<string, ApiBoard>; order: string[]; chainEdges: EdgeTuple[]; journeys: ApiJourney[] } | null = null;
+  private _d: { byId: Map<string, ApiBoard>; order: string[]; chainEdges: EdgeTuple[]; journeys: ApiJourney[]; variantsByBase: Map<string, ApiBoard[]> } | null = null;
   private _lay: Record<string, Layout> = {};
 
   d() {
     if (this._d) return this._d;
     const { boards, manifest } = this.props.data;
     const byId = new Map(boards.map((b) => [b.id, b]));
+    const variantsByBase = new Map<string, ApiBoard[]>();
+    boards.forEach((b) => {
+      if (b.variantOf) variantsByBase.set(b.variantOf, [...(variantsByBase.get(b.variantOf) ?? []), b]);
+    });
     const subIds = new Set(boards.flatMap((b) => b.nodes.map((n) => n.board)).filter(Boolean) as string[]);
-    let order = boards.filter((b) => !subIds.has(b.id)).map((b) => b.id);
+    let order = boards.filter((b) => !subIds.has(b.id) && !b.variantOf).map((b) => b.id);
     const chainEdges: EdgeTuple[] = [];
     for (const b of boards) {
       for (const l of b.links) {
@@ -257,7 +264,7 @@ export class App extends React.Component<AppProps, AppState> {
       });
     }
     order = [...sorted, ...order.filter((id) => !sorted.includes(id))]; // cycles/orphans keep file order
-    this._d = { byId, order, chainEdges, journeys: manifest?.journeys ?? [] };
+    this._d = { byId, order, chainEdges, journeys: manifest?.journeys ?? [], variantsByBase };
     return this._d;
   }
 
@@ -270,7 +277,16 @@ export class App extends React.Component<AppProps, AppState> {
   // ── navigation ──
 
   curEntry() { return this.state.stack[this.state.stack.length - 1] ?? null; }
-  curBoard() { const e = this.curEntry(); return e ? this.d().byId.get(e.id) ?? null : null; }
+  /** The displayed board: the selected variant of the stacked base id, else the base. */
+  curBoard() {
+    const e = this.curEntry();
+    if (!e) return null;
+    const sel = this.state.variantSel[e.id];
+    return this.d().byId.get(sel ?? e.id) ?? null;
+  }
+  setVariant(baseId: string, boardId: string) {
+    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: boardId }, selectedNodeId: this.firstNode(boardId) }));
+  }
   nodes() { return this.curBoard()?.nodes ?? []; }
   selIndex() { return this.nodes().findIndex((n) => n.id === this.state.selectedNodeId); }
   firstNode(id: string) { return this.d().byId.get(id)?.nodes[0]?.id ?? null; }
@@ -438,13 +454,37 @@ export class App extends React.Component<AppProps, AppState> {
         ? 'Step through nodes with the ◂ ▸ controls below. At an exit, follow the chip to the next board.'
         : 'Pick a persona to highlight their path, or open a board. Boards chain exit → entry into one continuous movie.';
 
-    // board view
+    // board view — `board` is the displayed version; ghosts come from the others
+    const baseEntryId = this.curEntry()?.id ?? '';
+    const baseBoard = d.byId.get(baseEntryId) ?? null;
+    const variants = d.variantsByBase.get(baseEntryId) ?? [];
+    const versions = baseBoard ? [baseBoard, ...variants] : [];
     const board = this.curBoard();
     const boardId = board?.id ?? '';
     const ns = this.nodes();
     const selI = this.selIndex();
     const activeSet = new Set(ns.slice(0, selI < 0 ? 0 : selI + 1).map((n) => n.id));
-    const lay = board ? this.layout(boardId, board.nodes, board.edges.map((e) => [e.from, e.to] as [string, string]), vertical, { nw: NODE_W, nh: NODE_H, main: vertical ? 128 : 260, cross: vertical ? 232 : 128 }) : null;
+
+    // with variants, lay out the UNION of all versions so shared nodes don't
+    // jump when the picker switches; without, keep the plain per-board layout
+    const hasVariants = versions.length > 1;
+    const unionNodes: ApiNode[] = [];
+    {
+      const seen = new Set<string>();
+      versions.forEach((v) => v.nodes.forEach((n) => { if (!seen.has(n.id)) { seen.add(n.id); unionNodes.push(n); } }));
+    }
+    const unionEdgeKeys = new Set<string>();
+    const unionEdges: Array<[string, string]> = [];
+    versions.forEach((v) => v.edges.forEach((e) => {
+      const k = `${e.from}>${e.to}`;
+      if (!unionEdgeKeys.has(k)) { unionEdgeKeys.add(k); unionEdges.push([e.from, e.to]); }
+    }));
+    const boardGaps = { nw: NODE_W, nh: NODE_H, main: vertical ? 128 : 260, cross: vertical ? 232 : 128 };
+    const lay = board
+      ? hasVariants
+        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionNodes, unionEdges, vertical, boardGaps)
+        : this.layout(boardId, board.nodes, board.edges.map((e) => [e.from, e.to] as [string, string]), vertical, boardGaps)
+      : null;
     const eff = (n: ApiNode) => {
       const base = lay?.pos[n.id] ?? { x: 32, y: 28 };
       const key = `${boardId}:${vertical ? 'v' : 'h'}:${n.id}`;
@@ -452,14 +492,30 @@ export class App extends React.Component<AppProps, AppState> {
       return { x: o?.x ?? base.x, y: o?.y ?? base.y, key };
     };
     const boardRects: Record<string, Rect> = {};
-    ns.forEach((n) => { const p = eff(n); boardRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: NODE_H }; });
+    (hasVariants ? unionNodes : ns).forEach((n) => { const p = eff(n); boardRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: NODE_H }; });
+
+    // diff vs the base (only meaningful when a variant is displayed)
+    const baseNodeById = new Map((baseBoard?.nodes ?? []).map((n) => [n.id, n]));
+    const activeIds = new Set(ns.map((n) => n.id));
+    const nodeDiff = (n: ApiNode): 'new' | 'changed' | null => {
+      if (!board?.variantOf) return null;
+      const b = baseNodeById.get(n.id);
+      if (!b) return 'new';
+      const sig = (x: ApiNode) => JSON.stringify([x.label, x.status, x.note, x.contract]);
+      return sig(n) !== sig(b) ? 'changed' : null;
+    };
+    // ghosts: union nodes/edges not in the displayed version, at low opacity
+    const ghostNodes = hasVariants ? unionNodes.filter((n) => !activeIds.has(n.id)) : [];
+    const activeEdgeKeys = new Set((board?.edges ?? []).map((e) => `${e.from}>${e.to}`));
+    const ghostEdges: EdgeTuple[] = hasVariants ? unionEdges.filter(([a, b]) => !activeEdgeKeys.has(`${a}>${b}`)) : [];
+
     const boardNodes = ns.map((n) => {
       const isSel = n.id === this.state.selectedNodeId;
       const kind = nodeKind(n);
       const p = eff(n);
       const status = n.status ?? 'planned';
       return {
-        id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subBoard: n.board,
+        id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subBoard: n.board, diff: nodeDiff(n),
         dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${status})`, flex: '0 0 auto' } as React.CSSProperties,
         style: { position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
         onMouseDown: (e: React.MouseEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
@@ -616,18 +672,57 @@ export class App extends React.Component<AppProps, AppState> {
                     </div>
                   </div>
                 )}
+                {hasVariants && (
+                  <div style={css('position:absolute;right:14px;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 200ms ease;')}>
+                    <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
+                    {versions.map((v) => (
+                      <label key={v.id} style={css('display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);cursor:pointer;')}>
+                        <input
+                          type="radio"
+                          name="cs-version"
+                          checked={boardId === v.id}
+                          onChange={() => this.setVariant(baseEntryId, v.id)}
+                          style={{ accentColor: 'var(--accent)', margin: 0, cursor: 'pointer' }}
+                        />
+                        <span style={css('font-weight:550;')}>{v.variantOf ? v.variantLabel ?? v.id : 'Current'}</span>
+                        <span style={{ ...statusPill(v.status), marginLeft: 'auto' }}>{statusMeta(v.status).label}</span>
+                      </label>
+                    ))}
+                    <div style={css('font-size:10px;color:var(--mute);border-top:1px solid var(--border);padding-top:7px;margin-top:2px;')}>ghosts = other versions · <b style={css('color:var(--accent);font-weight:600;')}>+ new / Δ</b> vs current</div>
+                  </div>
+                )}
                 <div style={css('flex:1 1 auto;position:relative;overflow:auto;background:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;')}>
                   <div style={css('position:absolute;left:16px;top:14px;z-index:5;')}>
                     <div style={css('font-size:17px;font-weight:650;letter-spacing:-0.015em;')}>{board?.title}</div>
                     <div style={css('font-size:12px;color:var(--dim);margin-top:2px;')}>{board ? portsSummary(board) : ''}</div>
                   </div>
                   <div style={{ position: 'relative', width: boardDims.w, height: boardDims.h, margin: '64px 40px 40px' }}>
+                    {ghostEdges.length > 0 && (
+                      <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, boardRects, boardDims, null, null, null, vertical)}</div>
+                    )}
                     <div style={css('position:absolute;left:0;top:0;')}>{boardEdgesEl}</div>
+                    {ghostNodes.map((n) => {
+                      const p = eff(n);
+                      const kind = nodeKind(n);
+                      return (
+                        <div key={'ghost-' + n.id} style={{ position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
+                          <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
+                            <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);")}>{GLYPHS[kind]}{TYPE_TEXT[kind]}</span>
+                          </div>
+                          <div style={css('font-size:13px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;margin-top:5px;')}>{nodeTitle(n)}</div>
+                        </div>
+                      );
+                    })}
                     {boardNodes.map((n) => (
                       <div key={n.id} onMouseDown={n.onMouseDown} style={n.style}>
                         <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);display:flex;align-items:center;gap:5px;")}>{n.glyph}{n.typeText}</span>
-                          <span style={n.dotStyle}></span>
+                          <span style={css('display:flex;align-items:center;gap:5px;')}>
+                            {n.diff && (
+                              <span style={css("font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:4px;padding:1px 5px;")}>{n.diff === 'new' ? '+ new' : 'Δ'}</span>
+                            )}
+                            <span style={n.dotStyle}></span>
+                          </span>
                         </div>
                         <div style={css('font-size:13px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;margin-top:5px;')}>{n.title}</div>
                         {n.isSubflow && (
