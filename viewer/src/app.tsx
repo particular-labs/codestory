@@ -232,6 +232,7 @@ interface AppState {
   variantSel: Record<string, string>; // base board id → selected version's board id
   flow: 'horizontal' | 'vertical'; // SSOT for flow direction — every layout/edge/port reads this
   notesOpen: boolean; // notes hub popover open — doubles as annotate mode (click a node to leave a change-note)
+  railOpen: Record<string, boolean>; // rail sub-flow tree: path → expanded (collapsed by default)
   notePopover: { board: string; node: string } | null; // open note editor
   noteDraft: string;
   promptText: string | null; // clipboard fallback overlay
@@ -246,10 +247,10 @@ const portsSummary = (b: ApiBoard) =>
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
     super(props);
-    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection, notesOpen: false, notePopover: null, noteDraft: '', promptText: null, copied: false };
+    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false };
   }
 
-  private _d: { byId: Map<string, ApiBoard>; order: string[]; chainEdges: EdgeTuple[]; journeys: ApiJourney[]; variantsByBase: Map<string, ApiBoard[]> } | null = null;
+  private _d: { byId: Map<string, ApiBoard>; order: string[]; chainEdges: EdgeTuple[]; journeys: ApiJourney[]; variantsByBase: Map<string, ApiBoard[]>; subsByBoard: Map<string, string[]> } | null = null;
   private _lay: Record<string, Layout> = {};
   private _es: EventSource | null = null;
 
@@ -359,6 +360,13 @@ export class App extends React.Component<AppProps, AppState> {
     });
     const subIds = new Set(boards.flatMap((b) => b.nodes.map((n) => n.board)).filter(Boolean) as string[]);
     let order = boards.filter((b) => !subIds.has(b.id) && !b.variantOf).map((b) => b.id);
+    // board id → its direct sub-flow board ids (node.board refs), in node order
+    const subsByBoard = new Map<string, string[]>();
+    boards.forEach((b) => {
+      if (b.variantOf) return;
+      const subs = b.nodes.flatMap((n) => (n.board ? [n.board] : [])).filter((s, i, a) => a.indexOf(s) === i);
+      if (subs.length) subsByBoard.set(b.id, subs);
+    });
     const chainEdges: EdgeTuple[] = [];
     for (const b of boards) {
       for (const l of b.links) {
@@ -380,7 +388,7 @@ export class App extends React.Component<AppProps, AppState> {
       });
     }
     order = [...sorted, ...order.filter((id) => !sorted.includes(id))]; // cycles/orphans keep file order
-    this._d = { byId, order, chainEdges, journeys: manifest?.journeys ?? [], variantsByBase };
+    this._d = { byId, order, chainEdges, journeys: manifest?.journeys ?? [], variantsByBase, subsByBoard };
     return this._d;
   }
 
@@ -566,14 +574,42 @@ export class App extends React.Component<AppProps, AppState> {
       const inJ = !jBoards || jBoards.includes(id);
       const seq = jBoards ? jBoards.indexOf(id) : -1;
       return [{
-        id, title: b.title,
+        id, inJ,
         badge: jBoards ? (inJ ? `${seq + 1}` : 'skip') : `${b.nodes.length}`,
         badgeStyle: jBoards ? (inJ ? stepBadge : outBadge) : countBadge,
-        onClick: () => this.enterBoard(id),
-        dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 } as React.CSSProperties,
-        style: { display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 10px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' } as React.CSSProperties,
       }];
     });
+
+    // one rail row + its sub-flow children, recursively; `visited` holds the
+    // ancestor chain so a cyclic sub-flow reference can never recurse forever
+    const railRow = (id: string, path: string, inJ: boolean, badge: string, badgeStyle: React.CSSProperties, visited: Set<string>): React.ReactNode => {
+      const b = d.byId.get(id);
+      if (!b) return null;
+      const subs = (d.subsByBoard.get(id) ?? []).filter((s) => !visited.has(s));
+      const open = !!this.state.railOpen[path];
+      const active = topBoardId === id;
+      return (
+        <div key={path} style={css('display:flex;flex-direction:column;gap:2px;')}>
+          <div style={css('display:flex;align-items:center;gap:0;')}>
+            <button
+              onClick={() => this.setState((s) => ({ railOpen: { ...s.railOpen, [path]: !open } }))}
+              title={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined}
+              style={{ flex: '0 0 auto', width: 15, height: 24, border: 'none', background: 'none', color: 'var(--mute)', fontSize: 9, padding: 0, cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
+            >{open ? '▾' : '▸'}</button>
+            <button onClick={() => this.enterBoard(id)} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
+              <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
+              <span style={badgeStyle}>{badge}</span>
+            </button>
+          </div>
+          {open && subs.length > 0 && (
+            <div style={css('margin-left:11px;padding-left:8px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
+              {subs.map((s) => railRow(s, `${path}/${s}`, inJ, `${d.byId.get(s)?.nodes.length ?? 0}`, countBadge, new Set([...visited, s])))}
+            </div>
+          )}
+        </div>
+      );
+    };
     const railHint = journey
       ? journey.persona ?? journey.title
       : isBoard
@@ -793,14 +829,8 @@ export class App extends React.Component<AppProps, AppState> {
                   <span style={css('flex:1 1 auto;text-align:left;')}>{ROOT_LABEL}</span>
                   <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap && !journey ? 'here' : 'root'}</span>
                 </button>
-                <div style={css('margin-left:9px;padding-left:11px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
-                  {railBoards.map((b) => (
-                    <button key={b.id} onClick={b.onClick} style={b.style}>
-                      <span style={b.dotStyle}></span>
-                      <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
-                      <span style={b.badgeStyle}>{b.badge}</span>
-                    </button>
-                  ))}
+                <div style={css('margin-left:9px;padding-left:2px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
+                  {railBoards.map((b) => railRow(b.id, b.id, b.inJ, b.badge, b.badgeStyle, new Set([b.id])))}
                 </div>
               </div>
             </div>
