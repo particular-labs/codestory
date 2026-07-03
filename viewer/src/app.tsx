@@ -97,12 +97,21 @@ function statusPill(s: Status): React.CSSProperties {
 }
 
 // ── layered DAG auto-layout (from the design export, generalized for cards vs nodes) ──
+// Size-aware Sugiyama subset: longest-path ranking → barycenter ordering sweeps
+// (crossing reduction) → cumulative per-rank packing using each node's real
+// estimated size, so tall nodes never overlap. Gaps are CLEARANCE between boxes.
 
-interface LayoutGaps { nw: number; nh: number; main: number; cross: number }
+interface LayoutGaps { main: number; cross: number }
+interface SizedNode { id: string; w: number; h: number }
 interface Layout { pos: Record<string, { x: number; y: number }>; w: number; h: number }
 
-function computeLayout(nodes: Array<{ id: string }>, edges: Array<[string, string]>, vertical: boolean, g: LayoutGaps): Layout {
+function computeLayout(nodes: SizedNode[], edges: Array<[string, string]>, vertical: boolean, g: LayoutGaps): Layout {
+  const PADX = 32, PADY = 28;
+  if (!nodes.length) return { pos: {}, w: PADX * 2, h: PADY * 2 };
   const ids = new Set(nodes.map((n) => n.id));
+  const size: Record<string, { w: number; h: number }> = {};
+  const authored: Record<string, number> = {};
+  nodes.forEach((n, i) => { size[n.id] = { w: n.w, h: n.h }; authored[n.id] = i; });
   const raw: Record<string, string[]> = {};
   nodes.forEach((n) => { raw[n.id] = []; });
   edges.forEach(([a, b]) => { if (ids.has(a) && ids.has(b) && a !== b) raw[a]!.push(b); });
@@ -120,11 +129,12 @@ function computeLayout(nodes: Array<{ id: string }>, edges: Array<[string, strin
 
   // 2. longest-path ranking over forward edges (Kahn relaxation)
   const adj: Record<string, string[]> = {};
+  const pred: Record<string, string[]> = {};
   const indeg: Record<string, number> = {};
-  nodes.forEach((n) => { adj[n.id] = []; indeg[n.id] = 0; });
+  nodes.forEach((n) => { adj[n.id] = []; pred[n.id] = []; indeg[n.id] = 0; });
   edges.forEach(([a, b]) => {
     if (!ids.has(a) || !ids.has(b) || a === b || back[a + '>' + b]) return;
-    adj[a]!.push(b); indeg[b]!++;
+    adj[a]!.push(b); pred[b]!.push(a); indeg[b]!++;
   });
   const rank: Record<string, number> = {};
   nodes.forEach((n) => { rank[n.id] = 0; });
@@ -134,28 +144,58 @@ function computeLayout(nodes: Array<{ id: string }>, edges: Array<[string, strin
     adj[u]!.forEach((v) => { if (rank[u]! + 1 > rank[v]!) rank[v] = rank[u]! + 1; if (--indeg[v]! === 0) q.push(v); });
   }
 
-  // 3. bucket nodes by rank, preserving authored order → lane index
+  // 3. bucket nodes by rank, preserving authored order → initial lane order
   const cols: Record<number, string[]> = {};
   let maxRank = 0;
   nodes.forEach((n) => { const r = rank[n.id]!; (cols[r] = cols[r] ?? []).push(n.id); if (r > maxRank) maxRank = r; });
-  let maxLane = 1;
-  for (const r in cols) maxLane = Math.max(maxLane, cols[r]!.length);
 
-  // 4. place: rank → main axis, lane (centered) → cross axis
-  const PADX = 32, PADY = 28;
+  // 3b. crossing reduction: barycenter ordering sweeps (down, up, down).
+  // A node's key is the mean centered lane index of its neighbors in the
+  // sweep direction; stable sort + authored tie-break keeps it deterministic.
+  const laneIdx: Record<string, number> = {};
+  const reindex = (r: number) => (cols[r] ?? []).forEach((id, i) => { laneIdx[id] = i; });
+  for (let r = 0; r <= maxRank; r++) reindex(r);
+  const centered = (id: string) => laneIdx[id]! - ((cols[rank[id]!]?.length ?? 1) - 1) / 2;
+  const sweep = (up: boolean) => {
+    for (let s = 0; s <= maxRank; s++) {
+      const r = up ? maxRank - s : s;
+      const col = cols[r];
+      if (!col || col.length < 2) continue;
+      const key: Record<string, number> = {};
+      col.forEach((id) => {
+        const nb = (up ? adj : pred)[id]!.filter((m) => rank[m] !== r);
+        key[id] = nb.length ? nb.reduce((a, m) => a + centered(m), 0) / nb.length : centered(id);
+      });
+      cols[r] = [...col].sort((a, b) => key[a]! - key[b]! || authored[a]! - authored[b]!);
+      reindex(r);
+    }
+  };
+  sweep(false); sweep(true); sweep(false);
+
+  // 4. coordinates: main axis advances by each rank's max extent + gap;
+  // cross axis packs each rank cumulatively (size + gap) and centers the
+  // rank's total span against the widest rank.
+  const mainOf = (id: string) => (vertical ? size[id]!.h : size[id]!.w);
+  const crossOf = (id: string) => (vertical ? size[id]!.w : size[id]!.h);
+  const mainPad = vertical ? PADY : PADX, crossPad = vertical ? PADX : PADY;
+  const spanOf = (col: string[]) => col.reduce((a, id) => a + crossOf(id), 0) + (col.length - 1) * g.cross;
+  let maxSpan = 0;
+  for (let r = 0; r <= maxRank; r++) maxSpan = Math.max(maxSpan, spanOf(cols[r] ?? []));
   const pos: Layout['pos'] = {};
+  let mainOff = mainPad;
   for (let r = 0; r <= maxRank; r++) {
     const col = cols[r] ?? [];
-    const start = (maxLane - col.length) / 2; // center the column
-    col.forEach((id, i) => {
-      const lane = start + i;
-      const main = (vertical ? PADY : PADX) + r * g.main;
-      const cross = (vertical ? PADX : PADY) + lane * g.cross;
-      pos[id] = vertical ? { x: cross, y: main } : { x: main, y: cross };
+    let crossOff = crossPad + (maxSpan - spanOf(col)) / 2;
+    let rankMain = 0;
+    col.forEach((id) => {
+      pos[id] = vertical ? { x: crossOff, y: mainOff } : { x: mainOff, y: crossOff };
+      crossOff += crossOf(id) + g.cross;
+      rankMain = Math.max(rankMain, mainOf(id));
     });
+    mainOff += rankMain + g.main;
   }
-  const acrossMain = (vertical ? PADY : PADX) + maxRank * g.main + (vertical ? g.nh : g.nw) + (vertical ? PADY : PADX);
-  const acrossCross = (vertical ? PADX : PADY) + (maxLane - 1) * g.cross + (vertical ? g.nw : g.nh) + (vertical ? PADX : PADY);
+  const acrossMain = mainOff - g.main + mainPad;
+  const acrossCross = crossPad * 2 + maxSpan;
   return { pos, w: vertical ? acrossCross : acrossMain, h: vertical ? acrossMain : acrossCross };
 }
 
@@ -170,16 +210,17 @@ function edgesSvg(edges: EdgeTuple[], nodeMap: Record<string, Rect>, dims: { w: 
   edges.forEach((e, i) => {
     const a = nodeMap[e[0]], b = nodeMap[e[1]];
     if (!a || !b) return;
-    let x1: number, y1: number, x2: number, y2: number, back: boolean, d: string;
+    let x1: number, y1: number, x2: number, y2: number, back: boolean, c1x: number, c1y: number, c2x: number, c2y: number;
     if (vertical) {
       x1 = a.x + a.w / 2; y1 = a.y + a.h; x2 = b.x + b.w / 2; y2 = b.y; back = b.y < a.y;
-      if (back) d = `M ${x1} ${y1} C ${x1 + 54} ${y1 + 34}, ${x2 + 54} ${y2 - 34}, ${x2} ${y2}`;
-      else { const dy = Math.max(30, Math.abs(y2 - y1) / 2); d = `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`; }
+      if (back) { c1x = x1 + 54; c1y = y1 + 34; c2x = x2 + 54; c2y = y2 - 34; }
+      else { const dy = Math.max(30, Math.abs(y2 - y1) / 2); c1x = x1; c1y = y1 + dy; c2x = x2; c2y = y2 - dy; }
     } else {
       x1 = a.x + a.w; y1 = a.y + a.h / 2; x2 = b.x; y2 = b.y + b.h / 2; back = b.x < a.x;
-      if (back) d = `M ${x1} ${y1} C ${x1 + 46} ${y1 - 34}, ${x2 - 46} ${y2 - 34}, ${x2} ${y2}`;
-      else { const dx = Math.max(38, Math.abs(x2 - x1) / 2); d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`; }
+      if (back) { c1x = x1 + 46; c1y = y1 - 34; c2x = x2 - 46; c2y = y2 - 34; }
+      else { const dx = Math.max(38, Math.abs(x2 - x1) / 2); c1x = x1 + dx; c1y = y1; c2x = x2 - dx; c2y = y2; }
     }
+    const d = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
     const act = !!activeSet && activeSet.has(e[0]) && activeSet.has(e[1]);
     const flowing = currentId != null && e[0] === currentId;
     const stroke = act || flowing ? 'var(--accent)' : 'var(--edge)';
@@ -189,7 +230,11 @@ function edgesSvg(edges: EdgeTuple[], nodeMap: Record<string, Rect>, dims: { w: 
     }
     const label = e[2];
     if (label) {
-      const mx = (x1 + x2) / 2 + (back && vertical ? 36 : 0), my = (y1 + y2) / 2 - (back && !vertical ? 30 : 0), w = label.length * 5.9 + 18;
+      // place the chip ON the curve, alternating 0.42/0.58 along it per edge
+      // index so neighboring chips (fan-outs, converging edges) don't stack
+      const t = i % 2 === 0 ? 0.42 : 0.58, u = 1 - t;
+      const bez = (p0: number, p1: number, p2: number, p3: number) => u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+      const mx = bez(x1, c1x, c2x, x2), my = bez(y1, c1y, c2y, y2), w = label.length * 5.9 + 18;
       const clickable = !!onLabel;
       els.push(R('g', { key: 'g' + i, onMouseDown: clickable ? (ev: React.MouseEvent) => { ev.stopPropagation(); onLabel!(e[0]); } : undefined, style: { cursor: clickable ? 'pointer' : 'default', pointerEvents: clickable ? 'auto' : 'none' } },
         R('rect', { x: mx - w / 2, y: my - 9.5, width: w, height: 19, rx: 6, fill: 'var(--surface)', stroke: act || flowing ? 'var(--accent)' : 'var(--borderStrong)' }),
@@ -243,6 +288,16 @@ interface AppState {
 
 const nodeKind = (n: ApiNode) => (n.journey ? 'subflow' : n.type);
 const nodeTitle = (n: ApiNode) => n.label ?? n.port ?? n.id;
+/** Estimated rendered height of a journey node card (pure; mirrors the card CSS:
+ *  minHeight 64, ~22 chars/wrapped title line at NODE_W, +28px Step-into button).
+ *  Ghosts render no button, but a node may be active in another variant, so we
+ *  size sub-flow nodes for the button either way — layout stays stable across
+ *  variant switches and ghosts just get extra slack. */
+const estimateNodeH = (n: ApiNode) => {
+  const lines = Math.max(1, Math.ceil(nodeTitle(n).length / 22));
+  return NODE_H + (lines - 1) * 17 + (nodeKind(n) === 'subflow' ? 28 : 0);
+};
+const sizedNode = (n: ApiNode): SizedNode => ({ id: n.id, w: NODE_W, h: estimateNodeH(n) });
 const portsSummary = (b: ApiJourney) =>
   [b.entries.length ? `entry: ${b.entries.join(', ')}` : '', b.exits.length ? `exits: ${b.exits.join(', ')}` : ''].filter(Boolean).join(' · ');
 
@@ -407,7 +462,7 @@ export class App extends React.Component<AppProps, AppState> {
     return this._d;
   }
 
-  layout(key: string, nodes: Array<{ id: string }>, edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout {
+  layout(key: string, nodes: SizedNode[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout {
     const k = `${key}:${vertical ? 'v' : 'h'}`;
     this._lay[k] = this._lay[k] ?? computeLayout(nodes, edges, vertical, gaps);
     return this._lay[k]!;
@@ -577,7 +632,7 @@ export class App extends React.Component<AppProps, AppState> {
     const q = this.state.query.trim().toLowerCase();
 
     // chain map
-    const chainLayout = this.layout('__chain', d.order.map((id) => ({ id })), d.chainEdges.map((e) => [e[0], e[1]] as [string, string]), vertical, { nw: CARD_W, nh: CARD_H, main: vertical ? 200 : 330, cross: vertical ? 290 : 170 });
+    const chainLayout = this.layout('__chain', d.order.map((id) => ({ id, w: CARD_W, h: CARD_H })), d.chainEdges.map((e) => [e[0], e[1]] as [string, string]), vertical, { main: vertical ? 80 : 106, cross: vertical ? 66 : 50 });
     const mapRects: Record<string, Rect> = {};
     const mapCards = d.order.map((id, idx) => {
       const b = d.byId.get(id)!;
@@ -699,11 +754,13 @@ export class App extends React.Component<AppProps, AppState> {
       const k = `${e.from}>${e.to}`;
       if (!unionEdgeKeys.has(k)) { unionEdgeKeys.add(k); unionEdges.push([e.from, e.to]); }
     }));
-    const journeyGaps = { nw: NODE_W, nh: NODE_H, main: vertical ? 128 : 260, cross: vertical ? 232 : 128 };
+    // gaps are clearance between boxes: main keeps the old rank pitch feel
+    // (260-176 / 128-64); cross is breathing room — real sizes do the rest
+    const journeyGaps = { main: vertical ? 64 : 84, cross: vertical ? 48 : 28 };
     const lay = journey
       ? hasVariants
-        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionNodes, unionEdges, vertical, journeyGaps)
-        : this.layout(journeyId, journey.nodes, journey.edges.map((e) => [e.from, e.to] as [string, string]), vertical, journeyGaps)
+        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionNodes.map(sizedNode), unionEdges, vertical, journeyGaps)
+        : this.layout(journeyId, journey.nodes.map(sizedNode), journey.edges.map((e) => [e.from, e.to] as [string, string]), vertical, journeyGaps)
       : null;
     const eff = (n: ApiNode) => {
       const base = lay?.pos[n.id] ?? { x: 32, y: 28 };
@@ -712,7 +769,7 @@ export class App extends React.Component<AppProps, AppState> {
       return { x: o?.x ?? base.x, y: o?.y ?? base.y, key };
     };
     const journeyRects: Record<string, Rect> = {};
-    (hasVariants ? unionNodes : ns).forEach((n) => { const p = eff(n); journeyRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: NODE_H }; });
+    (hasVariants ? unionNodes : ns).forEach((n) => { const p = eff(n); journeyRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: estimateNodeH(n) }; });
 
     // diff vs the base (only meaningful when a variant is displayed)
     const baseNodeById = new Map((baseJourney?.nodes ?? []).map((n) => [n.id, n]));
@@ -1006,7 +1063,7 @@ export class App extends React.Component<AppProps, AppState> {
                     {this.state.notePopover && this.state.notePopover.journey === journeyId && journeyRects[this.state.notePopover.node] && (
                       <div
                         onMouseDown={(e) => e.stopPropagation()}
-                        style={{ position: 'absolute', left: journeyRects[this.state.notePopover.node]!.x, top: journeyRects[this.state.notePopover.node]!.y + NODE_H + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
+                        style={{ position: 'absolute', left: journeyRects[this.state.notePopover.node]!.x, top: journeyRects[this.state.notePopover.node]!.y + journeyRects[this.state.notePopover.node]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
                       >
                         <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.state.notePopover.node}</div>
                         <textarea
