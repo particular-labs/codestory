@@ -26,6 +26,7 @@ const main = defineCommand({
   meta: { name: 'codestory', description: 'Living storyboards for codebases' },
   subCommands: {
     validate,
+    present: () => import('./present').then((m) => m.presentCommand),
   },
 });
 
