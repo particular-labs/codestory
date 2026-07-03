@@ -62,7 +62,9 @@ export interface AppProps {
   data: ApiData;
   defaultTheme: 'dark' | 'light';
   accent: string;
-  flowDirection: 'horizontal' | 'vertical';
+  /** Explicit flow choice (URL param or saved setting), or null when unset —
+   *  the App then defaults to vertical on narrow viewports, horizontal otherwise. */
+  flowDirection: 'horizontal' | 'vertical' | null;
 }
 
 // ── style helpers ──
@@ -236,7 +238,7 @@ function edgesSvg(edges: EdgeTuple[], nodeMap: Record<string, Rect>, dims: { w: 
       const bez = (p0: number, p1: number, p2: number, p3: number) => u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
       const mx = bez(x1, c1x, c2x, x2), my = bez(y1, c1y, c2y, y2), w = label.length * 5.9 + 18;
       const clickable = !!onLabel;
-      els.push(R('g', { key: 'g' + i, onMouseDown: clickable ? (ev: React.MouseEvent) => { ev.stopPropagation(); onLabel!(e[0]); } : undefined, style: { cursor: clickable ? 'pointer' : 'default', pointerEvents: clickable ? 'auto' : 'none' } },
+      els.push(R('g', { key: 'g' + i, onPointerDown: clickable ? (ev: React.PointerEvent) => { ev.stopPropagation(); onLabel!(e[0]); } : undefined, style: { cursor: clickable ? 'pointer' : 'default', pointerEvents: clickable ? 'auto' : 'none' } },
         R('rect', { x: mx - w / 2, y: my - 9.5, width: w, height: 19, rx: 6, fill: 'var(--surface)', stroke: act || flowing ? 'var(--accent)' : 'var(--borderStrong)' }),
         R('circle', { cx: mx - w / 2 + 8, cy: my, r: 2.4, fill: act || flowing ? 'var(--accent)' : 'var(--mute)' }),
         R('text', { x: mx + 4, y: my + 3.5, textAnchor: 'middle', fontSize: 10.5, fill: 'var(--fg)', style: { fontFamily: 'inherit', fontWeight: 500 } }, label),
@@ -258,6 +260,10 @@ const THEMES = {
 
 const NODE_W = 176, NODE_H = 64;
 const CARD_W = 224, CARD_H = 120;
+// phone breakpoint — SSOT for every narrow-viewport layout switch (drawer rail,
+// compact header, vertical-by-default canvas, bottom-sheet detail, ≥16px inputs)
+const NARROW_QUERY = '(max-width: 719px)';
+const narrowMql = () => (typeof matchMedia === 'function' ? matchMedia(NARROW_QUERY) : null);
 const ROOT_LABEL = 'Root'; // one name for the chain-map home, shared by rail + breadcrumb
 const PATH_SEP = '\u0000'; // rail-tree path separator — no filesystem allows it in a filename, so never in a journey id
 const GLYPHS: Record<string, string> = { step: '', decision: '◇ ', subflow: '▤ ', exit: '⚑ ' };
@@ -284,6 +290,8 @@ interface AppState {
   noteDraft: string;
   promptText: string | null; // clipboard fallback overlay
   copied: boolean;
+  isNarrow: boolean; // phone viewport (matchMedia SSOT) — drives responsive layout
+  drawerOpen: boolean; // narrow-only: left rail overlay drawer open
 }
 
 const nodeKind = (n: ApiNode) => (n.journey ? 'subflow' : n.type);
@@ -304,12 +312,19 @@ const portsSummary = (b: ApiJourney) =>
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
     super(props);
-    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false };
+    const isNarrow = narrowMql()?.matches ?? false;
+    // precedence: explicit URL/saved flow > narrow ? vertical : horizontal
+    const flow = props.flowDirection ?? (isNarrow ? 'vertical' : 'horizontal');
+    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false };
   }
 
   private _d: { byId: Map<string, ApiJourney>; order: string[]; chainEdges: EdgeTuple[]; personas: ApiPersona[]; variantsByBase: Map<string, ApiJourney[]>; subsByJourney: Map<string, string[]> } | null = null;
   private _lay: Record<string, Layout> = {};
   private _es: EventSource | null = null;
+  private _mql: MediaQueryList | null = null;
+  // one place updates isNarrow; a narrow→wide change also closes the drawer so it
+  // can't linger as a stuck overlay when the rail returns inline
+  private _onNarrow = (e: MediaQueryListEvent) => this.setState({ isNarrow: e.matches, drawerOpen: e.matches && this.state.drawerOpen });
 
   // ── live reload: SSE tells us .codestory/ changed → refetch + re-render, keeping
   //    the current view/stack/selection wherever those ids still exist ──
@@ -319,8 +334,12 @@ export class App extends React.Component<AppProps, AppState> {
       es.addEventListener('reload', () => { void this.refetch(); });
       this._es = es;
     } catch { /* SSE unsupported — no live reload, viewer still works */ }
+    this._mql = narrowMql();
+    this._mql?.addEventListener('change', this._onNarrow);
   }
-  componentWillUnmount() { this._es?.close(); }
+  componentWillUnmount() { this._es?.close(); this._mql?.removeEventListener('change', this._onNarrow); }
+
+  closeDrawer = () => this.setState({ drawerOpen: false });
 
   async refetch() {
     try {
@@ -586,13 +605,19 @@ export class App extends React.Component<AppProps, AppState> {
   }
 
   // ── drag (click vs drag disambiguated by 3px threshold) ──
+  // Pointer Events so mouse, touch, and pen all work: tap = select/open, drag =
+  // move. setPointerCapture keeps the gesture bound to the card even if the finger
+  // slides off it; captured events still bubble to the window listeners below.
 
-  startDrag(kind: 'map' | 'node', id: string, key: string, baseX: number, baseY: number, e: React.MouseEvent) {
-    if (e.button !== 0) return;
+  startDrag(kind: 'map' | 'node', id: string, key: string, baseX: number, baseY: number, e: React.PointerEvent) {
+    if (e.button !== 0) return; // primary button / primary touch only
     e.preventDefault();
-    const startX = e.clientX, startY = e.clientY;
+    const startX = e.clientX, startY = e.clientY, pointerId = e.pointerId;
+    const target = e.currentTarget as HTMLElement;
+    try { target.setPointerCapture(pointerId); } catch { /* capture unsupported — window listeners still work */ }
     let moved = false;
-    const move = (ev: MouseEvent) => {
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
       if (!moved && Math.abs(dx) + Math.abs(dy) > 3) moved = true;
       if (!moved) return;
@@ -600,9 +625,12 @@ export class App extends React.Component<AppProps, AppState> {
       if (kind === 'map') this.setState((s) => ({ mapPos: { ...s.mapPos, [key]: p } }));
       else this.setState((s) => ({ nodePos: { ...s.nodePos, [key]: p } }));
     };
-    const up = () => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      try { target.releasePointerCapture(pointerId); } catch { /* already released */ }
       if (moved) return;
       if (kind === 'map') { this.enterJourney(id); return; }
       this.selectNode(id);
@@ -610,8 +638,9 @@ export class App extends React.Component<AppProps, AppState> {
       const journey = this.curJourney();
       if (this.state.notesOpen && journey) this.setState({ notePopover: { journey: journey.id, node: id }, noteDraft: '' });
     };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   }
 
   // ── render ──
@@ -626,6 +655,7 @@ export class App extends React.Component<AppProps, AppState> {
     const isMap = this.state.view === 'map';
     const isJourney = this.state.view === 'journey';
     const vertical = this.state.flow === 'vertical';
+    const { isNarrow, drawerOpen } = this.state;
     const topJourneyId = this.state.stack[0]?.id ?? null;
     const persona = this.state.persona ? d.personas.find((j) => j.id === this.state.persona) ?? null : null;
     const personaSet = persona ? new Set(persona.journeys) : null;
@@ -656,9 +686,9 @@ export class App extends React.Component<AppProps, AppState> {
         id, index: `JOURNEY ${idx + 1}`, title: b.title, sub: portsSummary(b),
         meta: `${b.nodes.length} nodes · ${built} built`,
         statusText: statusMeta(b.status).label, statusStyle: statusPill(b.status),
-        style: { position: 'absolute', left: px, top: py, width: CARD_W, height: CARD_H, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', boxShadow: 'var(--shadow)', padding: '13px 15px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', opacity: dim ? 0.34 : 1, transition: 'opacity 200ms ease, box-shadow 160ms ease', outline: inJ && personaSet ? '1.5px solid var(--accent)' : 'none', outlineOffset: -1.5 } as React.CSSProperties,
+        style: { position: 'absolute', left: px, top: py, width: CARD_W, height: CARD_H, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', boxShadow: 'var(--shadow)', padding: '13px 15px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', opacity: dim ? 0.34 : 1, transition: 'opacity 200ms ease, box-shadow 160ms ease', outline: inJ && personaSet ? '1.5px solid var(--accent)' : 'none', outlineOffset: -1.5 } as React.CSSProperties,
         entryPort: portStyle(vertical ? 'top' : 'left'), exitPort: portStyle(vertical ? 'bottom' : 'right'),
-        onMouseDown: (e: React.MouseEvent) => this.startDrag('map', id, mkey, px, py, e),
+        onPointerDown: (e: React.PointerEvent) => this.startDrag('map', id, mkey, px, py, e),
       };
     });
     const mapDims = { w: Math.max(chainLayout.w, 480), h: Math.max(chainLayout.h, 360) };
@@ -709,7 +739,7 @@ export class App extends React.Component<AppProps, AppState> {
               data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
               style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
             >{open ? '▾' : '▸'}</button>
-            <button onClick={() => this.enterPath(path.split(PATH_SEP))} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
+            <button onClick={() => { this.enterPath(path.split(PATH_SEP)); this.closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
               <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
               <span style={badgeStyle}>{badge}</span>
@@ -795,8 +825,8 @@ export class App extends React.Component<AppProps, AppState> {
         id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subJourney: n.journey, diff: nodeDiff(n),
         noteCount: journeyId ? this.openNotesFor(journeyId, n.id).length : 0,
         dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${status})`, flex: '0 0 auto' } as React.CSSProperties,
-        style: { position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
-        onMouseDown: (e: React.MouseEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
+        style: { position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
+        onPointerDown: (e: React.PointerEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
       };
     });
     const journeyDims = lay ? { w: Math.max(lay.w, 480), h: Math.max(lay.h, 360) } : { w: 480, h: 360 };
@@ -806,9 +836,20 @@ export class App extends React.Component<AppProps, AppState> {
     // crumbs
     const crumbBtn = (last: boolean): React.CSSProperties => ({ border: 'none', background: 'none', padding: '3px 6px', borderRadius: 5, color: last ? 'var(--fg)' : 'var(--dim)', fontWeight: last ? 600 : 500, fontSize: 12.5, cursor: last ? 'default' : 'pointer' });
     const crumbs: Array<{ label: string; onClick: () => void; style: React.CSSProperties }> = [{ label: ROOT_LABEL, onClick: () => this.goCrumb(0), style: crumbBtn(false) }];
+    const crumbSep = (): React.CSSProperties => ({ border: 'none', background: 'none', color: 'var(--mute)', fontSize: 12, padding: '0 1px', cursor: 'default' });
+    const stackLen = this.state.stack.length;
     this.state.stack.forEach((entry, i) => {
-      const last = i === this.state.stack.length - 1;
-      crumbs.push({ label: '/', onClick: () => {}, style: { border: 'none', background: 'none', color: 'var(--mute)', fontSize: 12, padding: '0 1px', cursor: 'default' } });
+      const last = i === stackLen - 1;
+      // narrow: collapse the middle of a deep path to a single "…" (up one level)
+      // so a long call stack never widens the header past the viewport
+      if (isNarrow && stackLen > 2 && i > 0 && !last) {
+        if (i === 1) {
+          crumbs.push({ label: '/', onClick: () => {}, style: crumbSep() });
+          crumbs.push({ label: '…', onClick: () => this.goCrumb(stackLen - 1), style: crumbBtn(false) });
+        }
+        return;
+      }
+      crumbs.push({ label: '/', onClick: () => {}, style: crumbSep() });
       crumbs.push({ label: d.byId.get(entry.id)?.title ?? entry.id, onClick: () => this.goCrumb(i + 1), style: crumbBtn(last) });
     });
 
@@ -826,39 +867,51 @@ export class App extends React.Component<AppProps, AppState> {
     const chk = (_i: number) => selStatus === 'built';
     const detailShown = isJourney && !!selNode && this.state.detailOpen;
     const lensBlocked = isJourney && !!personaSet && !!topJourneyId && !personaSet.has(topJourneyId);
+    // left rail: inline 220px column normally; on narrow it's an overlay drawer
+    // (absolute within the content row) that slides in over a tap-to-close backdrop
+    const railStyle: React.CSSProperties = isNarrow
+      ? { ...css('position:absolute;left:0;top:0;bottom:0;z-index:40;border-right:1px solid var(--border);background:var(--surface);padding:14px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:18px;box-shadow:var(--shadow);'), width: 280, maxWidth: '82vw', transform: drawerOpen ? 'translateX(0)' : 'translateX(-102%)', transition: 'transform 200ms ease' }
+      : css('width:220px;flex:0 0 auto;border-right:1px solid var(--border);background:var(--surface);padding:14px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:18px;');
 
     return (
       <div style={rootStyle as React.CSSProperties}>
-        <div style={css('height:52px;flex:0 0 auto;display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid var(--border);background:var(--surface);z-index:20;')}>
-          <div style={css('display:flex;align-items:center;gap:9px;')}>
+        <div style={{ ...css('height:52px;flex:0 0 auto;display:flex;align-items:center;border-bottom:1px solid var(--border);background:var(--surface);z-index:20;'), gap: isNarrow ? 8 : 16, padding: isNarrow ? '0 10px' : '0 16px' }}>
+          {isNarrow && (
+            <button data-tip="Menu" data-tip-align="left" onClick={() => this.setState((s) => ({ drawerOpen: !s.drawerOpen }))} style={css('width:30px;height:30px;flex:0 0 auto;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:15px;display:flex;align-items:center;justify-content:center;')}>☰</button>
+          )}
+          <div style={{ ...css('display:flex;align-items:center;gap:9px;'), flex: '0 0 auto' }}>
             <div style={css('width:15px;height:15px;border-radius:4px;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft);')}></div>
             <span style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>codestory</span>
-            <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.state.data.manifest?.project ?? 'codestory present'}</span>
-            {(this.state.data.issues?.length ?? 0) > 0 && (
+            {!isNarrow && (
+              <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.state.data.manifest?.project ?? 'codestory present'}</span>
+            )}
+            {!isNarrow && (this.state.data.issues?.length ?? 0) > 0 && (
               <span title={this.state.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.state.data.issues!.length} validate issue(s) — journeys may be missing</span>
             )}
           </div>
 
-          <div style={css('flex:1 1 auto;display:flex;justify-content:center;')}>
+          <div style={css('flex:1 1 auto;min-width:0;display:flex;justify-content:center;overflow:hidden;')}>
             {isMap && (
-              <div style={css('position:relative;width:320px;max-width:42vw;')}>
-                <input value={this.state.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Search journeys & nodes" style={css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;font-size:12.5px;outline:none;')} />
+              <div style={{ ...css('position:relative;'), width: isNarrow ? '100%' : 320, maxWidth: isNarrow ? '100%' : '42vw' }}>
+                <input value={this.state.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Search journeys & nodes" style={{ ...css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;outline:none;'), fontSize: isNarrow ? 16 : 12.5 }} />
                 <span style={css('position:absolute;left:9px;top:7px;color:var(--mute);font-size:13px;')}>⌕</span>
               </div>
             )}
             {isJourney && (
-              <div style={css('display:flex;align-items:center;gap:2px;font-size:12.5px;')}>
+              <div style={css('display:flex;align-items:center;gap:2px;font-size:12.5px;min-width:0;overflow:hidden;white-space:nowrap;')}>
                 {crumbs.map((c, i) => <button key={i} onClick={c.onClick} style={c.style}>{c.label}</button>)}
               </div>
             )}
           </div>
 
-          <div style={css('display:flex;align-items:center;gap:8px;')}>
-            <div style={css('display:flex;align-items:center;gap:12px;font-size:10.5px;color:var(--mute);margin-right:2px;')}>
-              <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--planned);')}></span>planned</span>
-              <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--built);')}></span>built</span>
-              <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
-            </div>
+          <div style={{ ...css('display:flex;align-items:center;gap:8px;'), flex: '0 0 auto' }}>
+            {!isNarrow && (
+              <div style={css('display:flex;align-items:center;gap:12px;font-size:10.5px;color:var(--mute);margin-right:2px;')}>
+                <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--planned);')}></span>planned</span>
+                <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--built);')}></span>built</span>
+                <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
+              </div>
+            )}
             <button data-tip={this.state.notesOpen ? 'Notes hub open — click a node to note it' : 'Notes — annotate nodes, copy as prompt'} onClick={() => this.setState((s) => ({ notesOpen: !s.notesOpen, notePopover: null }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               ✎
               {this.openNotes().length > 0 && (
@@ -872,7 +925,7 @@ export class App extends React.Component<AppProps, AppState> {
         </div>
 
         {this.state.notesOpen && (
-          <div style={css('position:absolute;right:12px;top:58px;z-index:30;width:340px;max-height:70vh;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;')}>
+          <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 340, maxHeight: isNarrow ? '60vh' : '70vh' }}>
             <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
               <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Notes</div>
               <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Click any node on a journey to leave a change-note.</div>
@@ -913,8 +966,11 @@ export class App extends React.Component<AppProps, AppState> {
           </div>
         )}
 
-        <div style={css('flex:1 1 auto;display:flex;min-height:0;')}>
-          <div style={css('width:220px;flex:0 0 auto;border-right:1px solid var(--border);background:var(--surface);padding:14px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:18px;')}>
+        <div style={css('flex:1 1 auto;display:flex;min-height:0;position:relative;')}>
+          {isNarrow && drawerOpen && (
+            <div onPointerDown={this.closeDrawer} style={css('position:absolute;inset:0;z-index:38;background:var(--overlay);animation:fadeZoom 160ms ease;')}></div>
+          )}
+          <div style={railStyle}>
             <div>
               <div style={css('padding:0 4px 9px;')}>
                 <div style={css('font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Personas</div>
@@ -940,7 +996,7 @@ export class App extends React.Component<AppProps, AppState> {
               </div>
               <div style={css('display:flex;flex-direction:column;gap:2px;')}>
                 {/* Root is "selected" only when it's truly the whole map — view=map AND no persona lens; one active thing at a time */}
-                <button onClick={() => this.goCrumb(0)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !persona ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !persona ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                <button onClick={() => { this.goCrumb(0); this.closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !persona ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !persona ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                   <span style={css('display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:var(--accentSoft);color:var(--accent);font-size:11px;flex:0 0 auto;')}>⊞</span>
                   <span style={css('flex:1 1 auto;text-align:left;')}>{ROOT_LABEL}</span>
                   <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap && !persona ? 'here' : 'root'}</span>
@@ -960,7 +1016,7 @@ export class App extends React.Component<AppProps, AppState> {
                 <div ref={this.canvasEl} style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: 32 }}>
                   <div style={css('position:absolute;left:0;top:0;')}>{chainEdgesEl}</div>
                   {mapCards.map((m) => (
-                    <div key={m.id} onMouseDown={m.onMouseDown} style={m.style}>
+                    <div key={m.id} onPointerDown={m.onPointerDown} style={m.style}>
                       <span style={m.entryPort}></span>
                       <span style={m.exitPort}></span>
                       <div style={css('display:flex;align-items:center;justify-content:space-between;')}>
@@ -996,7 +1052,7 @@ export class App extends React.Component<AppProps, AppState> {
                   </div>
                 )}
                 {hasVariants && (
-                  <div style={css('position:absolute;right:14px;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 200ms ease;')}>
+                  <div style={{ ...css('position:absolute;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);overflow-y:auto;animation:slideUp 200ms ease;'), right: 14, left: isNarrow ? 12 : 'auto', maxHeight: isNarrow ? '45vh' : 'none' }}>
                     <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
                     {versions.map((v) => (
                       <label key={v.id} style={css('display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);cursor:pointer;')}>
@@ -1037,7 +1093,7 @@ export class App extends React.Component<AppProps, AppState> {
                       );
                     })}
                     {journeyNodes.map((n) => (
-                      <div key={n.id} onMouseDown={n.onMouseDown} style={n.style}>
+                      <div key={n.id} onPointerDown={n.onPointerDown} style={n.style}>
                         <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);display:flex;align-items:center;gap:5px;")}>{n.glyph}{n.typeText}</span>
                           <span style={css('display:flex;align-items:center;gap:5px;')}>
@@ -1053,7 +1109,7 @@ export class App extends React.Component<AppProps, AppState> {
                         <div style={css('font-size:13px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;margin-top:5px;')}>{n.title}</div>
                         {n.isSubflow && (
                           <button
-                            onMouseDown={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
                             onClick={(e) => { e.stopPropagation(); this.stepInto(n.subJourney!, n.id); }}
                             style={css('margin-top:7px;align-self:flex-start;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:5px;padding:2px 8px;display:flex;align-items:center;gap:4px;cursor:pointer;')}
                           >Step into ↘</button>
@@ -1062,7 +1118,7 @@ export class App extends React.Component<AppProps, AppState> {
                     ))}
                     {this.state.notePopover && this.state.notePopover.journey === journeyId && journeyRects[this.state.notePopover.node] && (
                       <div
-                        onMouseDown={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
                         style={{ position: 'absolute', left: journeyRects[this.state.notePopover.node]!.x, top: journeyRects[this.state.notePopover.node]!.y + journeyRects[this.state.notePopover.node]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
                       >
                         <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.state.notePopover.node}</div>
@@ -1072,7 +1128,7 @@ export class App extends React.Component<AppProps, AppState> {
                           onChange={(e) => this.setState({ noteDraft: e.target.value })}
                           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.node, this.state.noteDraft); } if (e.key === 'Escape') this.setState({ notePopover: null }); }}
                           placeholder="What should change here?"
-                          style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: 12.5, fontFamily: 'inherit', outline: 'none' }}
+                          style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: isNarrow ? 16 : 12.5, fontFamily: 'inherit', outline: 'none' }}
                         />
                         <div style={css('display:flex;align-items:center;justify-content:flex-end;gap:7px;')}>
                           <button onClick={() => this.setState({ notePopover: null, noteDraft: '' })} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
@@ -1083,7 +1139,7 @@ export class App extends React.Component<AppProps, AppState> {
                   </div>
                 </div>
                 <div style={css('flex:0 0 auto;border-top:1px solid var(--border);background:var(--surface);z-index:10;')}>
-                  <div style={css('min-height:56px;display:flex;align-items:center;gap:14px;padding:9px 16px;')}>
+                  <div style={{ ...css('min-height:56px;display:flex;align-items:center;'), flexWrap: isNarrow ? 'wrap' : 'nowrap', gap: isNarrow ? '8px 10px' : 14, padding: isNarrow ? '9px 12px' : '9px 16px' }}>
                     <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
                       <button data-tip="Previous node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
                       <button data-tip="Next node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
@@ -1100,7 +1156,7 @@ export class App extends React.Component<AppProps, AppState> {
                   </div>
 
                   {detailShown && selNode && (
-                    <div style={css('border-top:1px solid var(--border);padding:16px 18px;display:flex;flex-wrap:wrap;gap:14px 34px;max-height:236px;overflow-y:auto;animation:panelUp 200ms ease;')}>
+                    <div style={{ ...css('border-top:1px solid var(--border);padding:16px 18px;display:flex;flex-wrap:wrap;gap:14px 34px;overflow-y:auto;animation:panelUp 200ms ease;'), maxHeight: isNarrow ? '50vh' : 236 }}>
                       <div style={css('flex:0 0 auto;max-width:280px;display:flex;flex-direction:column;')}>
                         <div style={css('display:flex;align-items:center;gap:9px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;color:var(--mute);")}>{TYPE_TEXT[nodeKind(selNode)]}</span>
@@ -1164,8 +1220,8 @@ export class App extends React.Component<AppProps, AppState> {
         </div>
 
         {this.state.promptText !== null && (
-          <div onMouseDown={() => this.setState({ promptText: null })} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
-            <div onMouseDown={(e) => e.stopPropagation()} style={css('width:560px;max-width:90vw;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;gap:12px;')}>
+          <div onPointerDown={() => this.setState({ promptText: null })} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
+            <div onPointerDown={(e) => e.stopPropagation()} style={css('width:560px;max-width:90vw;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;gap:12px;')}>
               <div style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>Copy prompt manually</div>
               <div style={css('font-size:12px;color:var(--dim);line-height:1.5;')}>Clipboard access was blocked — select all and copy the block below.</div>
               <textarea

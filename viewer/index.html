@@ -24,6 +24,8 @@ button{font:inherit;cursor:pointer;}
 [data-tip]:hover::after,[data-tip]:focus-visible::after{opacity:1;transform:none;visibility:visible;transition-delay:250ms;}
 [data-tip-pos="up"]::after{top:auto;bottom:calc(100% + 7px);}
 [data-tip-align="left"]::after{right:auto;left:0;}
+/* touch devices have no hover — long-press would fire these chips as noise; suppress */
+@media (hover:none){[data-tip]::after{display:none!important;}}
 </style>
 </head>
 <body>
