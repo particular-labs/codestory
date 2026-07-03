@@ -465,15 +465,22 @@ export class App extends React.Component<AppProps, AppState> {
 
   private canvasEl = React.createRef<HTMLDivElement>();
   /** Export the visible canvas (chain map or current board) as a 2x PNG. The
-   *  clone loses the root element's CSS vars, so re-inject the theme tokens. */
+   *  clone detaches from the root that defines our CSS vars, and html-to-image's
+   *  `style` option can't set custom properties (Object.assign, not setProperty) —
+   *  so pin the tokens inline on the real element for the capture, then restore. */
   async exportPng() {
     const el = this.canvasEl.current;
     if (!el) return;
     const t: Record<string, string> = { ...THEMES[this.state.theme], accent: this.props.accent || THEMES[this.state.theme].accent };
-    const style: Record<string, string> = { margin: '0' };
-    Object.keys(t).forEach((k) => { style['--' + k] = t[k]!; });
-    style.fontFamily = '-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif';
-    const dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: t.bg, style: style as React.CSSProperties as Record<string, string> });
+    const prevCss = el.style.cssText;
+    Object.keys(t).forEach((k) => el.style.setProperty('--' + k, t[k]!));
+    el.style.fontFamily = '-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif';
+    let dataUrl: string;
+    try {
+      dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: t.bg });
+    } finally {
+      el.style.cssText = prevCss;
+    }
     const a = document.createElement('a');
     a.href = dataUrl;
     const board = this.curBoard();
