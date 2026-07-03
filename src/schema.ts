@@ -95,3 +95,26 @@ export const ManifestSchema = z.strictObject({
   journeys: z.array(JourneySchema).default([]), // journeys = named entry lenses; no single root
 });
 export type Manifest = z.infer<typeof ManifestSchema>;
+
+// Annotations layer: reviewers drop change-notes against boards/nodes in the
+// viewer; agents read them, apply the change, flip them applied. Notes ALWAYS
+// live in the sidecar `.codestory/notes.json`, never inside board files.
+export const NoteStatusSchema = z.enum(['open', 'applied']);
+export type NoteStatus = z.infer<typeof NoteStatusSchema>;
+
+export const NoteSchema = z.strictObject({
+  id: z.string().min(1),
+  board: z.string().min(1), // must reference an existing board id (base or variant)
+  node: z.string().min(1).optional(), // if set, must exist on that board
+  text: z.string().min(1),
+  status: NoteStatusSchema.default('open'),
+  createdAt: z.string(), // ISO 8601
+});
+export type Note = z.infer<typeof NoteSchema>;
+
+export const NotesFileSchema = z.strictObject({
+  $schema: z.literal('codestory/notes.v0'),
+  version: z.number().int(),
+  notes: z.array(NoteSchema).default([]),
+});
+export type NotesFile = z.infer<typeof NotesFileSchema>;

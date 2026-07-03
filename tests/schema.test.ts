@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { BoardSchema, ManifestSchema } from '../src/schema';
+import { BoardSchema, ManifestSchema, NotesFileSchema } from '../src/schema';
 
 const manifest = {
   $schema: 'codestory/manifest.v0',
@@ -119,5 +119,45 @@ describe('BoardSchema', () => {
 
   test('rejects bad status', () => {
     expect(() => BoardSchema.parse({ ...board, status: 'done' })).toThrow();
+  });
+});
+
+const notesFile = {
+  $schema: 'codestory/notes.v0',
+  version: 1,
+  notes: [
+    { id: 'n1', board: 'turnover-dispatch', node: 'trig', text: 'tighten the window', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
+    { id: 'n2', board: 'turnover-dispatch', text: 'board-level note, no node', status: 'applied', createdAt: '2026-07-03T00:00:00.000Z' },
+  ],
+};
+
+describe('NotesFileSchema', () => {
+  test('parses a valid notes file', () => {
+    const f = NotesFileSchema.parse(notesFile);
+    expect(f.notes).toHaveLength(2);
+    expect(f.notes[0]?.node).toBe('trig');
+    expect(f.notes[1]?.node).toBeUndefined(); // node is optional
+  });
+
+  test('status defaults to open', () => {
+    const f = NotesFileSchema.parse({
+      $schema: 'codestory/notes.v0', version: 1,
+      notes: [{ id: 'n', board: 'b', text: 't', createdAt: '2026-07-03T00:00:00.000Z' }],
+    });
+    expect(f.notes[0]?.status).toBe('open');
+  });
+
+  test('rejects wrong $schema', () => {
+    expect(() => NotesFileSchema.parse({ ...notesFile, $schema: 'codestory/notes.v1' })).toThrow();
+  });
+
+  test('rejects empty text and empty id', () => {
+    expect(() => NotesFileSchema.parse({ ...notesFile, notes: [{ id: '', board: 'b', text: 't', createdAt: 'x' }] })).toThrow();
+    expect(() => NotesFileSchema.parse({ ...notesFile, notes: [{ id: 'n', board: 'b', text: '', createdAt: 'x' }] })).toThrow();
+  });
+
+  test('rejects unknown status and unknown keys', () => {
+    expect(() => NotesFileSchema.parse({ ...notesFile, notes: [{ id: 'n', board: 'b', text: 't', status: 'closed', createdAt: 'x' }] })).toThrow();
+    expect(() => NotesFileSchema.parse({ ...notesFile, notes: [{ id: 'n', board: 'b', text: 't', createdAt: 'x', oops: 1 }] })).toThrow();
   });
 });
