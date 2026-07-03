@@ -787,10 +787,11 @@ export class App extends React.Component<AppProps, AppState> {
                 <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>{jBoards ? 'Steps in this persona’s flow' : 'Open a journey to inspect'}</div>
               </div>
               <div style={css('display:flex;flex-direction:column;gap:2px;')}>
-                <button onClick={() => this.goCrumb(0)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap ? 'var(--accent)' : 'var(--border)'}`, background: isMap ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                {/* Root is "selected" only when it's truly the whole map — view=map AND no journey lens; one active thing at a time */}
+                <button onClick={() => this.goCrumb(0)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !journey ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !journey ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                   <span style={css('display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:var(--accentSoft);color:var(--accent);font-size:11px;flex:0 0 auto;')}>⊞</span>
                   <span style={css('flex:1 1 auto;text-align:left;')}>{ROOT_LABEL}</span>
-                  <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap ? 'here' : 'root'}</span>
+                  <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap && !journey ? 'here' : 'root'}</span>
                 </button>
                 <div style={css('margin-left:9px;padding-left:11px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
                   {railBoards.map((b) => (

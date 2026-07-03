@@ -25,7 +25,11 @@ const MIME: Record<string, string> = {
 /** Read a file into a Response with a best-effort Content-Type (node:fs, no Bun). */
 function fileResponse(path: string): Response {
   const type = MIME[extname(path)] ?? 'application/octet-stream';
-  return new Response(readFileSync(path), { headers: { 'content-type': type } });
+  const headers: Record<string, string> = { 'content-type': type };
+  // html must never be cached: it references hash-named bundles, and a cached
+  // shell keeps serving yesterday's app after a rebuild (assets stay cacheable)
+  if (type.startsWith('text/html')) headers['cache-control'] = 'no-store';
+  return new Response(readFileSync(path), { headers });
 }
 
 /** Hono app: GET /api/boards + static viewer bundle with SPA fallback. */
