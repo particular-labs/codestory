@@ -212,6 +212,7 @@ const THEMES = {
 
 const NODE_W = 176, NODE_H = 64;
 const CARD_W = 224, CARD_H = 120;
+const ROOT_LABEL = 'Root'; // one name for the chain-map home, shared by rail + breadcrumb
 const GLYPHS: Record<string, string> = { step: '', decision: '◇ ', subflow: '▤ ', exit: '⚑ ' };
 const TYPE_TEXT: Record<string, string> = { step: 'STEP', decision: 'DECISION', subflow: 'SUB-FLOW', exit: 'EXIT' };
 
@@ -415,7 +416,7 @@ export class App extends React.Component<AppProps, AppState> {
     this.setState((s) => ({ stack: [...s.stack, { id: subId, callerBoard: cur.id, callerNode }], selectedNodeId: this.firstNode(this.displayedId(subId)) }));
   }
   goCrumb(k: number) {
-    if (k === 0) { this.setState({ view: 'map' }); return; }
+    if (k === 0) { this.setState({ view: 'map', journey: null }); return; } // Root = whole map, no lens
     this.setState((s) => {
       const st = s.stack.slice(0, k);
       return { stack: st, selectedNodeId: this.firstNode(this.displayedId(st[st.length - 1]!.id)) };
@@ -653,7 +654,7 @@ export class App extends React.Component<AppProps, AppState> {
 
     // crumbs
     const crumbBtn = (last: boolean): React.CSSProperties => ({ border: 'none', background: 'none', padding: '3px 6px', borderRadius: 5, color: last ? 'var(--fg)' : 'var(--dim)', fontWeight: last ? 600 : 500, fontSize: 12.5, cursor: last ? 'default' : 'pointer' });
-    const crumbs: Array<{ label: string; onClick: () => void; style: React.CSSProperties }> = [{ label: 'Chain map', onClick: () => this.goCrumb(0), style: crumbBtn(false) }];
+    const crumbs: Array<{ label: string; onClick: () => void; style: React.CSSProperties }> = [{ label: ROOT_LABEL, onClick: () => this.goCrumb(0), style: crumbBtn(false) }];
     this.state.stack.forEach((entry, i) => {
       const last = i === this.state.stack.length - 1;
       crumbs.push({ label: '/', onClick: () => {}, style: { border: 'none', background: 'none', color: 'var(--mute)', fontSize: 12, padding: '0 1px', cursor: 'default' } });
@@ -788,7 +789,7 @@ export class App extends React.Component<AppProps, AppState> {
               <div style={css('display:flex;flex-direction:column;gap:2px;')}>
                 <button onClick={() => this.goCrumb(0)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap ? 'var(--accent)' : 'var(--border)'}`, background: isMap ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                   <span style={css('display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:var(--accentSoft);color:var(--accent);font-size:11px;flex:0 0 auto;')}>⊞</span>
-                  <span style={css('flex:1 1 auto;text-align:left;')}>Root</span>
+                  <span style={css('flex:1 1 auto;text-align:left;')}>{ROOT_LABEL}</span>
                   <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap ? 'here' : 'root'}</span>
                 </button>
                 <div style={css('margin-left:9px;padding-left:11px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
