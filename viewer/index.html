@@ -19,6 +19,11 @@ button{font:inherit;cursor:pointer;}
 @keyframes slideUp{from{transform:translateY(10px);}to{transform:translateY(0);}}
 @keyframes panelUp{from{transform:translateY(14px);}to{transform:translateY(0);}}
 @keyframes dashFlow{to{stroke-dashoffset:-16;}}
+[data-tip]{position:relative;}
+[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 7px);right:0;z-index:120;white-space:nowrap;background:var(--surface2);color:var(--fg);border:1px solid var(--borderStrong);border-radius:6px;padding:4px 9px;font-size:11px;font-weight:500;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;letter-spacing:0;box-shadow:var(--shadow);pointer-events:none;opacity:0;transform:translateY(-2px);visibility:hidden;transition:opacity 120ms ease,transform 120ms ease;}
+[data-tip]:hover::after,[data-tip]:focus-visible::after{opacity:1;transform:none;visibility:visible;transition-delay:250ms;}
+[data-tip-pos="up"]::after{top:auto;bottom:calc(100% + 7px);}
+[data-tip-align="left"]::after{right:auto;left:0;}
 </style>
 </head>
 <body>

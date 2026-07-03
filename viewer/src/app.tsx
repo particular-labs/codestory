@@ -640,7 +640,7 @@ export class App extends React.Component<AppProps, AppState> {
           <div style={css('display:flex;align-items:center;gap:0;')}>
             <button
               onClick={() => this.setState((s) => ({ railOpen: { ...s.railOpen, [path]: !open } }))}
-              title={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined}
+              data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
               style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
             >{open ? '▾' : '▸'}</button>
             <button onClick={() => this.enterPath(path.split(PATH_SEP))} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
@@ -791,15 +791,15 @@ export class App extends React.Component<AppProps, AppState> {
               <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--built);')}></span>built</span>
               <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
             </div>
-            <button title={this.state.notesOpen ? 'Notes hub open — click a node to leave a note' : 'Notes — annotate nodes, copy as prompt'} onClick={() => this.setState((s) => ({ notesOpen: !s.notesOpen, notePopover: null }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <button data-tip={this.state.notesOpen ? 'Notes hub open — click a node to note it' : 'Notes — annotate nodes, copy as prompt'} onClick={() => this.setState((s) => ({ notesOpen: !s.notesOpen, notePopover: null }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               ✎
               {this.openNotes().length > 0 && (
                 <span style={css("position:absolute;top:-5px;right:-5px;min-width:14px;height:14px;border-radius:7px;background:var(--accent);color:var(--accentFg);font-size:9px;font-weight:700;line-height:14px;text-align:center;padding:0 3px;font-family:'JetBrains Mono',monospace;")}>{this.openNotes().length}</span>
               )}
             </button>
-            <button title={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? '⇅' : '⇄'}</button>
-            <button title="Export view as PNG" onClick={() => void this.exportPng()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>⤓</button>
-            <button title={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? '☀' : '☾'}</button>
+            <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? '⇅' : '⇄'}</button>
+            <button data-tip="Export view as PNG" onClick={() => void this.exportPng()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>⤓</button>
+            <button data-tip={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? '☀' : '☾'}</button>
           </div>
         </div>
 
@@ -828,7 +828,7 @@ export class App extends React.Component<AppProps, AppState> {
                       {!applied && (
                         <button onClick={() => this.applyNote(n.id)} title="Mark applied" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--built);background:transparent;color:var(--built);font-size:10.5px;font-weight:600;cursor:pointer;')}>✓ applied</button>
                       )}
-                      <button onClick={() => this.deleteNote(n.id)} title="Delete note" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--borderStrong);background:transparent;color:var(--dim);font-size:10.5px;font-weight:600;cursor:pointer;')}>🗑</button>
+                      <button onClick={() => this.deleteNote(n.id)} data-tip="Delete note" data-tip-pos="up" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--borderStrong);background:transparent;color:var(--dim);font-size:10.5px;font-weight:600;cursor:pointer;')}>🗑</button>
                     </div>
                   </div>
                 );
@@ -1017,8 +1017,8 @@ export class App extends React.Component<AppProps, AppState> {
                 <div style={css('flex:0 0 auto;border-top:1px solid var(--border);background:var(--surface);z-index:10;')}>
                   <div style={css('min-height:56px;display:flex;align-items:center;gap:14px;padding:9px 16px;')}>
                     <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
-                      <button title="Previous node" onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
-                      <button title="Next node" onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
+                      <button data-tip="Previous node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
+                      <button data-tip="Next node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
                     </div>
                     <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>
                     <div style={css('flex:0 0 120px;height:4px;border-radius:3px;background:var(--inset);overflow:hidden;')}>
@@ -1028,7 +1028,7 @@ export class App extends React.Component<AppProps, AppState> {
                     {cont && (
                       <button onClick={cont.onClick} style={css('flex:0 0 auto;height:32px;padding:0 13px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;animation:slideUp 220ms ease;')}>{cont.label}</button>
                     )}
-                    <button title={this.state.detailOpen ? 'Hide node detail' : 'Show node detail'} onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))} style={css('flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:11px;')}>{this.state.detailOpen ? '▾' : '▴'}</button>
+                    <button data-tip={this.state.detailOpen ? 'Hide node detail' : 'Show node detail'} data-tip-pos="up" onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))} style={css('flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:11px;')}>{this.state.detailOpen ? '▾' : '▴'}</button>
                   </div>
 
                   {detailShown && selNode && (
