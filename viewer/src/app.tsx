@@ -213,6 +213,7 @@ const THEMES = {
 const NODE_W = 176, NODE_H = 64;
 const CARD_W = 224, CARD_H = 120;
 const ROOT_LABEL = 'Root'; // one name for the chain-map home, shared by rail + breadcrumb
+const PATH_SEP = '\u0000'; // rail-tree path separator — no filesystem allows it in a filename, so never in a board id
 const GLYPHS: Record<string, string> = { step: '', decision: '◇ ', subflow: '▤ ', exit: '⚑ ' };
 const TYPE_TEXT: Record<string, string> = { step: 'STEP', decision: 'DECISION', subflow: 'SUB-FLOW', exit: 'EXIT' };
 
@@ -358,15 +359,28 @@ export class App extends React.Component<AppProps, AppState> {
     boards.forEach((b) => {
       if (b.variantOf) variantsByBase.set(b.variantOf, [...(variantsByBase.get(b.variantOf) ?? []), b]);
     });
-    const subIds = new Set(boards.flatMap((b) => b.nodes.map((n) => n.board)).filter(Boolean) as string[]);
-    let order = boards.filter((b) => !subIds.has(b.id) && !b.variantOf).map((b) => b.id);
+    // the base-board graph defines the tree; variants' extra sub refs don't hide boards
+    const bases = boards.filter((b) => !b.variantOf);
+    const subIds = new Set(bases.flatMap((b) => b.nodes.map((n) => n.board)).filter(Boolean) as string[]);
+    let order = bases.filter((b) => !subIds.has(b.id)).map((b) => b.id);
     // board id → its direct sub-flow board ids (node.board refs), in node order
     const subsByBoard = new Map<string, string[]>();
-    boards.forEach((b) => {
-      if (b.variantOf) return;
+    bases.forEach((b) => {
       const subs = b.nodes.flatMap((n) => (n.board ? [n.board] : [])).filter((s, i, a) => a.indexOf(s) === i);
       if (subs.length) subsByBoard.set(b.id, subs);
     });
+    // cycle rescue: a mutually-referencing component has no unreferenced root —
+    // surface any base board unreachable from the roots as a root itself
+    {
+      const reachable = new Set(order);
+      const queue = [...order];
+      while (queue.length) {
+        for (const s of subsByBoard.get(queue.shift()!) ?? []) {
+          if (!reachable.has(s)) { reachable.add(s); queue.push(s); }
+        }
+      }
+      order = [...order, ...bases.filter((b) => !reachable.has(b.id)).map((b) => b.id)];
+    }
     const chainEdges: EdgeTuple[] = [];
     for (const b of boards) {
       for (const l of b.links) {
@@ -418,6 +432,20 @@ export class App extends React.Component<AppProps, AppState> {
   firstNode(id: string) { return this.d().byId.get(id)?.nodes[0]?.id ?? null; }
 
   enterBoard(id: string) { this.setState({ view: 'board', stack: [{ id }], selectedNodeId: this.firstNode(this.displayedId(id)) }); }
+  /** Enter a nested board with its full caller chain (rail tree click) so
+   *  breadcrumbs, Return chips, and the journey lens see the real call stack. */
+  enterPath(ids: string[]) {
+    const d = this.d();
+    const stack: StackEntry[] = [];
+    ids.forEach((id, i) => {
+      if (i === 0) { stack.push({ id }); return; }
+      const parent = ids[i - 1]!;
+      const callerNode = d.byId.get(this.displayedId(parent))?.nodes.find((n) => n.board === id)?.id;
+      stack.push({ id, callerBoard: parent, ...(callerNode ? { callerNode } : {}) });
+    });
+    const last = ids[ids.length - 1]!;
+    this.setState({ view: 'board', stack, selectedNodeId: this.firstNode(this.displayedId(last)) });
+  }
   stepInto(subId: string, callerNode: string) {
     const cur = this.curEntry();
     if (!cur) return;
@@ -563,7 +591,8 @@ export class App extends React.Component<AppProps, AppState> {
       };
     });
     const jBoards = journey?.boards ?? null;
-    const railOrder = jBoards ? [...jBoards, ...d.order.filter((id) => !jBoards.includes(id))] : d.order;
+    // top level = root boards only; a journey-listed sub-board stays nested (no duplicate rows)
+    const railOrder = (jBoards ? [...jBoards, ...d.order.filter((id) => !jBoards.includes(id))] : d.order).filter((id) => d.order.includes(id));
     const countBadge: React.CSSProperties = { fontFamily: mono, fontSize: 10, color: 'var(--mute)' };
     const stepBadge: React.CSSProperties = { fontFamily: mono, fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'var(--accentSoft)', border: '1px solid var(--accent)', borderRadius: 5, padding: '1px 6px' };
     const outBadge: React.CSSProperties = { fontFamily: mono, fontSize: 10, color: 'var(--mute)', opacity: 0.7 };
@@ -587,7 +616,7 @@ export class App extends React.Component<AppProps, AppState> {
       if (!b) return null;
       const subs = (d.subsByBoard.get(id) ?? []).filter((s) => !visited.has(s));
       const open = !!this.state.railOpen[path];
-      const active = topBoardId === id;
+      const active = this.curEntry()?.id === id; // highlight the board being viewed, not the stack root
       return (
         <div key={path} style={css('display:flex;flex-direction:column;gap:2px;')}>
           <div style={css('display:flex;align-items:center;gap:0;')}>
@@ -596,7 +625,7 @@ export class App extends React.Component<AppProps, AppState> {
               title={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined}
               style={{ flex: '0 0 auto', width: 15, height: 24, border: 'none', background: 'none', color: 'var(--mute)', fontSize: 9, padding: 0, cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
             >{open ? '▾' : '▸'}</button>
-            <button onClick={() => this.enterBoard(id)} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
+            <button onClick={() => this.enterPath(path.split(PATH_SEP))} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
               <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
               <span style={badgeStyle}>{badge}</span>
@@ -604,7 +633,7 @@ export class App extends React.Component<AppProps, AppState> {
           </div>
           {open && subs.length > 0 && (
             <div style={css('margin-left:11px;padding-left:8px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
-              {subs.map((s) => railRow(s, `${path}/${s}`, inJ, `${d.byId.get(s)?.nodes.length ?? 0}`, countBadge, new Set([...visited, s])))}
+              {subs.map((s) => railRow(s, `${path}${PATH_SEP}${s}`, inJ, `${d.byId.get(s)?.nodes.length ?? 0}`, countBadge, new Set([...visited, s])))}
             </div>
           )}
         </div>

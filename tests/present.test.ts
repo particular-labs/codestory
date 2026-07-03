@@ -44,9 +44,11 @@ describe('present app', () => {
     const home = await app.request('/');
     expect(home.status).toBe(200);
     expect(await home.text()).toContain('viewer');
+    expect(home.headers.get('cache-control')).toBe('no-store'); // html shell must never cache
     const js = await app.request('/assets/app.js');
     expect(js.status).toBe(200);
     expect(await js.text()).toBe('console.log(1)'); // the asset itself, not the SPA fallback
+    expect(js.headers.get('cache-control')).toBeNull(); // hashed assets stay cacheable
   });
 
   test('unknown path falls back to index.html (SPA)', async () => {
