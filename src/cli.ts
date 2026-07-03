@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { defineCommand, runMain } from 'citty';
 import { resolve } from 'node:path';
+import { version } from '../package.json';
+import { initCommand } from './init';
 import { validateDir } from './validate';
 
 const validate = defineCommand({
@@ -23,8 +25,9 @@ const validate = defineCommand({
 });
 
 const main = defineCommand({
-  meta: { name: 'codestory', description: 'Living storyboards for codebases' },
+  meta: { name: 'codestory', version, description: 'Living storyboards for codebases' },
   subCommands: {
+    init: initCommand,
     validate,
     present: () => import('./present').then((m) => m.presentCommand),
   },
