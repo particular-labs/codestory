@@ -1,3 +1,4 @@
+import { toPng } from 'html-to-image';
 import * as React from 'react';
 import { saveSetting } from './settings';
 
@@ -461,6 +462,23 @@ export class App extends React.Component<AppProps, AppState> {
   selectNode(id: string) { this.setState({ selectedNodeId: id }); }
   setJourney(id: string) { this.setState((s) => ({ journey: s.journey === id ? null : id })); }
   toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSetting('theme', theme); return { theme }; }); }
+
+  private canvasEl = React.createRef<HTMLDivElement>();
+  /** Export the visible canvas (chain map or current board) as a 2x PNG. The
+   *  clone loses the root element's CSS vars, so re-inject the theme tokens. */
+  async exportPng() {
+    const el = this.canvasEl.current;
+    if (!el) return;
+    const t: Record<string, string> = { ...THEMES[this.state.theme], accent: this.props.accent || THEMES[this.state.theme].accent };
+    const style: Record<string, string> = { margin: '0' };
+    Object.keys(t).forEach((k) => { style['--' + k] = t[k]!; });
+    style.fontFamily = '-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif';
+    const dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: t.bg, style: style as React.CSSProperties as Record<string, string> });
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `${this.curEntry()?.id ?? 'chain-map'}.png`;
+    a.click();
+  }
   toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSetting('flow', flow); return { flow }; }); }
 
   step(dir: number) {
@@ -780,7 +798,8 @@ export class App extends React.Component<AppProps, AppState> {
               )}
             </button>
             <button title={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? '⇅' : '⇄'}</button>
-            <button onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? '☀' : '☾'}</button>
+            <button title="Export view as PNG" onClick={() => void this.exportPng()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>⤓</button>
+            <button title={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? '☀' : '☾'}</button>
           </div>
         </div>
 
@@ -870,7 +889,7 @@ export class App extends React.Component<AppProps, AppState> {
           <div style={css('flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;')}>
             {isMap && (
               <div style={css('flex:1 1 auto;position:relative;overflow:auto;background:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;animation:fadeZoom 240ms ease;')}>
-                <div style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: 32 }}>
+                <div ref={this.canvasEl} style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: 32 }}>
                   <div style={css('position:absolute;left:0;top:0;')}>{chainEdgesEl}</div>
                   {mapCards.map((m) => (
                     <div key={m.id} onMouseDown={m.onMouseDown} style={m.style}>
@@ -932,7 +951,7 @@ export class App extends React.Component<AppProps, AppState> {
                     <div style={css('font-size:17px;font-weight:650;letter-spacing:-0.015em;')}>{board?.title}</div>
                     <div style={css('font-size:12px;color:var(--dim);margin-top:2px;')}>{board ? portsSummary(board) : ''}</div>
                   </div>
-                  <div style={{ position: 'relative', width: boardDims.w, height: boardDims.h, margin: '64px 40px 40px' }}>
+                  <div ref={this.canvasEl} style={{ position: 'relative', width: boardDims.w, height: boardDims.h, margin: '64px 40px 40px' }}>
                     {ghostEdges.length > 0 && (
                       <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, boardRects, boardDims, null, null, null, vertical)}</div>
                     )}
@@ -998,8 +1017,8 @@ export class App extends React.Component<AppProps, AppState> {
                 <div style={css('flex:0 0 auto;border-top:1px solid var(--border);background:var(--surface);z-index:10;')}>
                   <div style={css('min-height:56px;display:flex;align-items:center;gap:14px;padding:9px 16px;')}>
                     <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
-                      <button onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
-                      <button onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
+                      <button title="Previous node" onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
+                      <button title="Next node" onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
                     </div>
                     <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>
                     <div style={css('flex:0 0 120px;height:4px;border-radius:3px;background:var(--inset);overflow:hidden;')}>
@@ -1009,7 +1028,7 @@ export class App extends React.Component<AppProps, AppState> {
                     {cont && (
                       <button onClick={cont.onClick} style={css('flex:0 0 auto;height:32px;padding:0 13px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;animation:slideUp 220ms ease;')}>{cont.label}</button>
                     )}
-                    <button onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))} style={css('flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:11px;')}>{this.state.detailOpen ? '▾' : '▴'}</button>
+                    <button title={this.state.detailOpen ? 'Hide node detail' : 'Show node detail'} onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))} style={css('flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:11px;')}>{this.state.detailOpen ? '▾' : '▴'}</button>
                   </div>
 
                   {detailShown && selNode && (
