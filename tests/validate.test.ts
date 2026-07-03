@@ -149,6 +149,18 @@ describe('validateDir', () => {
     expect(present.issues).toEqual([]);
   });
 
+  test('empty or repo-escaping refs → issue', async () => {
+    const withRef = (ref: string): Json => ({
+      ...alpha,
+      nodes: [{ id: 'a', type: 'step', label: 'A', refs: [ref] }],
+      edges: [], links: [],
+    });
+    const empty = await issuesOf({ ...good, '.codestory/alpha.board.json': withRef('#Missing') });
+    expect(empty.issues.some((i) => i.message.includes('repo-relative'))).toBe(true);
+    const escape = await issuesOf({ ...good, '.codestory/alpha.board.json': withRef('../../etc/passwd') });
+    expect(escape.issues.some((i) => i.message.includes('repo-relative'))).toBe(true);
+  });
+
   test('built node without tests → issue', async () => {
     const a = {
       ...alpha,
@@ -168,7 +180,7 @@ describe('validateDir', () => {
   test('duplicate board ids and node ids → issues', async () => {
     const dupBoard = { ...beta, id: 'alpha' };
     const r = await issuesOf({ ...good, '.codestory/beta.board.json': dupBoard });
-    expect(r.issues.length).toBeGreaterThan(0);
+    expect(r.issues.some((i) => i.message.includes('duplicate board id'))).toBe(true);
 
     const dupNodes = { ...beta, nodes: [{ id: 'b', type: 'step', label: 'B' }, { id: 'b', type: 'step', label: 'B2' }] };
     const r2 = await issuesOf({ ...good, '.codestory/beta.board.json': dupNodes });

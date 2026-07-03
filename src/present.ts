@@ -51,7 +51,8 @@ export const presentCommand = defineCommand({
     const r = await validateDir(dir);
     for (const issue of r.issues) console.error(`⚠ ${issue.file}: ${issue.message}`);
     const port = Number(args.port);
-    Bun.serve({ port, fetch: buildApp(dir).fetch });
+    // loopback only — this serves repo internals; LAN exposure is share-layer (v2) scope
+    Bun.serve({ port, hostname: '127.0.0.1', fetch: buildApp(dir).fetch });
     const url = `http://localhost:${port}`;
     console.log(`codestory present → ${url}  (${r.boards.length} boards)`);
     if (!args['no-open']) {

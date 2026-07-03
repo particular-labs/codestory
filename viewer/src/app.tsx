@@ -41,6 +41,7 @@ export interface ApiJourney {
 export interface ApiData {
   manifest: { project: string; journeys: ApiJourney[] } | null;
   boards: ApiBoard[];
+  issues?: Array<{ file: string; message: string }>;
 }
 
 export interface AppProps {
@@ -487,7 +488,8 @@ export class App extends React.Component<AppProps, AppState> {
     const atEnd = selI >= ns.length - 1;
     const navBtn = (disabled: boolean): React.CSSProperties => ({ width: 32, height: 32, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: disabled ? 'var(--mute)' : 'var(--dim)', fontSize: 13, opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' });
     const selStatus = selNode?.status ?? 'planned';
-    const chk = (i: number) => selStatus === 'built' ? true : selStatus === 'drifted' ? i % 2 === 0 : false;
+    // honest rule: criteria read as verified only when the node is built (has tests)
+    const chk = (_i: number) => selStatus === 'built';
     const detailShown = isBoard && !!selNode && this.state.detailOpen;
     const lensBlocked = isBoard && !!journeySet && !!topBoardId && !journeySet.has(topBoardId);
 
@@ -498,6 +500,9 @@ export class App extends React.Component<AppProps, AppState> {
             <div style={css('width:15px;height:15px;border-radius:4px;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft);')}></div>
             <span style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>codestory</span>
             <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.props.data.manifest?.project ?? 'codestory present'}</span>
+            {(this.props.data.issues?.length ?? 0) > 0 && (
+              <span title={this.props.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.props.data.issues!.length} validate issue(s) — boards may be missing</span>
+            )}
           </div>
 
           <div style={css('flex:1 1 auto;display:flex;justify-content:center;')}>

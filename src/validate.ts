@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { BoardSchema, ManifestSchema, type Board, type Manifest } from './schema';
 
 export interface ValidationIssue {
@@ -84,7 +84,9 @@ export async function validateDir(dir: string): Promise<ValidationResult> {
       }
       for (const ref of n.refs ?? []) {
         const path = ref.split('#')[0]!;
-        if (!existsSync(join(repoRoot, path))) push(file, `node '${n.id}' ref not found on disk: ${path}`);
+        const abs = resolve(repoRoot, path);
+        if (!path || !abs.startsWith(resolve(repoRoot))) push(file, `node '${n.id}' ref is not a repo-relative path: '${ref}'`);
+        else if (!existsSync(abs)) push(file, `node '${n.id}' ref not found on disk: ${path}`);
       }
     }
     for (const e of board.edges) {

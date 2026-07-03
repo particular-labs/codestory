@@ -45,6 +45,7 @@ describe('present app', () => {
     expect(await home.text()).toContain('viewer');
     const js = await app.request('/assets/app.js');
     expect(js.status).toBe(200);
+    expect(await js.text()).toBe('console.log(1)'); // the asset itself, not the SPA fallback
   });
 
   test('unknown path falls back to index.html (SPA)', async () => {
