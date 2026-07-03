@@ -623,7 +623,7 @@ export class App extends React.Component<AppProps, AppState> {
             <button
               onClick={() => this.setState((s) => ({ railOpen: { ...s.railOpen, [path]: !open } }))}
               title={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined}
-              style={{ flex: '0 0 auto', width: 16, height: 24, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 11, padding: 0, cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
+              style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
             >{open ? '▾' : '▸'}</button>
             <button onClick={() => this.enterPath(path.split(PATH_SEP))} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
