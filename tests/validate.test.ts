@@ -187,6 +187,36 @@ describe('validateDir', () => {
     expect(r2.issues.some((i) => i.message.includes("'b'"))).toBe(true);
   });
 
+  test('valid variant board (same ports as base) → green', async () => {
+    const variant = {
+      ...alpha,
+      id: 'alpha@v2',
+      variantOf: 'alpha',
+      variantLabel: 'V2 take',
+    };
+    const r = await issuesOf({ ...good, '.codestory/alpha@v2.board.json': variant });
+    expect(r.issues).toEqual([]);
+  });
+
+  test('variantOf must reference an existing base board', async () => {
+    const variant = { ...beta, id: 'x@v2', variantOf: 'ghost', links: [] };
+    const r = await issuesOf({ ...good, '.codestory/x@v2.board.json': variant });
+    expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
+  });
+
+  test('variant ports must match the base (ports are the contract)', async () => {
+    const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha', exits: ['other'], links: [], nodes: [{ id: 'a', type: 'step', label: 'A' }], edges: [] };
+    const r = await issuesOf({ ...good, '.codestory/alpha@v2.board.json': variant });
+    expect(r.issues.some((i) => i.message.match(/exits.*match base/))).toBe(true);
+  });
+
+  test('variant of a variant is rejected', async () => {
+    const v1 = { ...alpha, id: 'alpha@v1', variantOf: 'alpha' };
+    const v2 = { ...alpha, id: 'alpha@v2', variantOf: 'alpha@v1' };
+    const r = await issuesOf({ ...good, '.codestory/alpha@v1.board.json': v1, '.codestory/alpha@v2.board.json': v2 });
+    expect(r.issues.some((i) => i.message.includes('base board'))).toBe(true);
+  });
+
   test('board file name must match board id', async () => {
     const r = await issuesOf({ ...good, '.codestory/gamma.board.json': { ...beta, id: 'delta' } });
     expect(r.issues.some((i) => i.file.includes('gamma.board.json'))).toBe(true);
