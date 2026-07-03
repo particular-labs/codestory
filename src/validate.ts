@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { BoardSchema, ManifestSchema, type Board, type Manifest } from './schema';
+import { BoardSchema, ManifestSchema, NotesFileSchema, type Board, type Manifest, type Note } from './schema';
 
 export interface ValidationIssue {
   file: string;
@@ -13,6 +13,7 @@ export interface ValidationResult {
   issues: ValidationIssue[];
   boards: Board[];
   manifest: Manifest | null;
+  notes: Note[];
 }
 
 /**
@@ -28,7 +29,7 @@ export async function validateDir(dir: string): Promise<ValidationResult> {
   const push = (file: string, message: string) => issues.push({ file, message });
 
   if (!existsSync(dir)) {
-    return { ok: false, issues: [{ file: dir, message: 'no .codestory/ directory found' }], boards: [], manifest: null };
+    return { ok: false, issues: [{ file: dir, message: 'no .codestory/ directory found' }], boards: [], manifest: null, notes: [] };
   }
 
   const files = await readdir(dir);
@@ -136,7 +137,33 @@ export async function validateDir(dir: string): Promise<ValidationResult> {
     }
   }
 
-  return { ok: issues.length === 0, issues, boards, manifest };
+  // notes.v0 sidecar (optional): schema-parse, then every note must reference an
+  // existing board (base or variant) and, if set, an existing node on that board;
+  // ids are unique. Absent notes.json is fine.
+  let notes: Note[] = [];
+  if (files.includes('notes.json')) {
+    const notesFile = join(dir, 'notes.json');
+    const parsed = await parseJson(notesFile, push);
+    if (parsed !== undefined) {
+      const r = NotesFileSchema.safeParse(parsed);
+      if (!r.success) push(notesFile, zodMessage(r.error));
+      else {
+        notes = r.data.notes;
+        const seen = new Set<string>();
+        for (const n of notes) {
+          if (seen.has(n.id)) push(notesFile, `duplicate note id '${n.id}'`);
+          seen.add(n.id);
+          const board = byId.get(n.board);
+          if (!board) push(notesFile, `note '${n.id}' references unknown board '${n.board}'`);
+          else if (n.node && !board.nodes.some((nd) => nd.id === n.node)) {
+            push(notesFile, `note '${n.id}' references unknown node '${n.node}' on board '${n.board}'`);
+          }
+        }
+      }
+    }
+  }
+
+  return { ok: issues.length === 0, issues, boards, manifest, notes };
 }
 
 async function parseJson(file: string, push: (file: string, message: string) => void): Promise<unknown> {

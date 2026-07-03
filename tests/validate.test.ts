@@ -243,4 +243,74 @@ describe('validateDir', () => {
     const r = await issuesOf({ ...good, '.codestory/gamma.board.json': { ...beta, id: 'delta' } });
     expect(r.issues.some((i) => i.file.includes('gamma.board.json'))).toBe(true);
   });
+
+  // ── notes.v0 sidecar ──
+
+  const notesFile = (notes: unknown[]): Json => ({ $schema: 'codestory/notes.v0', version: 1, notes });
+
+  test('absent notes.json is fine; result.notes is []', async () => {
+    const r = await issuesOf(good);
+    expect(r.ok).toBe(true);
+    expect(r.notes).toEqual([]);
+  });
+
+  test('valid notes referencing real board + node → green, notes returned', async () => {
+    const r = await issuesOf({
+      ...good,
+      '.codestory/notes.json': notesFile([
+        { id: 'n1', board: 'alpha', node: 'a', text: 'fix A', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
+        { id: 'n2', board: 'beta', text: 'board note', status: 'applied', createdAt: '2026-07-03T00:00:00.000Z' },
+      ]),
+    });
+    expect(r.issues).toEqual([]);
+    expect(r.notes).toHaveLength(2);
+    expect(r.notes[0]?.id).toBe('n1');
+  });
+
+  test('note referencing unknown board → issue', async () => {
+    const r = await issuesOf({
+      ...good,
+      '.codestory/notes.json': notesFile([{ id: 'n', board: 'ghost', text: 't', createdAt: 'x' }]),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
+  });
+
+  test('note referencing unknown node on a real board → issue', async () => {
+    const r = await issuesOf({
+      ...good,
+      '.codestory/notes.json': notesFile([{ id: 'n', board: 'alpha', node: 'nope', text: 't', createdAt: 'x' }]),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.message.includes('nope'))).toBe(true);
+  });
+
+  test('duplicate note ids → issue', async () => {
+    const r = await issuesOf({
+      ...good,
+      '.codestory/notes.json': notesFile([
+        { id: 'dup', board: 'alpha', text: 'a', createdAt: 'x' },
+        { id: 'dup', board: 'beta', text: 'b', createdAt: 'x' },
+      ]),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.message.includes('dup'))).toBe(true);
+  });
+
+  test('malformed notes.json → issue, not crash', async () => {
+    const bad = await issuesOf({ ...good, '.codestory/notes.json': '{ nope' });
+    expect(bad.ok).toBe(false);
+    const badSchema = await issuesOf({ ...good, '.codestory/notes.json': notesFile([{ id: 'n', board: 'alpha', text: '', createdAt: 'x' }]) });
+    expect(badSchema.ok).toBe(false);
+  });
+
+  test('note may reference a variant board id', async () => {
+    const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha', variantLabel: 'V2' };
+    const r = await issuesOf({
+      ...good,
+      '.codestory/alpha@v2.board.json': variant,
+      '.codestory/notes.json': notesFile([{ id: 'n', board: 'alpha@v2', node: 'a', text: 't', createdAt: 'x' }]),
+    });
+    expect(r.issues).toEqual([]);
+  });
 });
