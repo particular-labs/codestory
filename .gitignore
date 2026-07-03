@@ -3,3 +3,6 @@ dist/
 viewer/dist/
 viewer/node_modules/
 .DS_Store
+.claude/
+.serena/
+.playwright-mcp/

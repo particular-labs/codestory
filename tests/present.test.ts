@@ -134,6 +134,33 @@ describe('notes API', () => {
     expect(res.status).toBe(404);
   });
 
+  test('POST with { id, delete } removes the note and persists', async () => {
+    const dir = fixtureRepo();
+    const app = buildApp(dir, fakeDist());
+    const note = (await (await app.request(postJson({ board: 'alpha', node: 'a', text: 'scrap this' }))).json()) as { id: string };
+
+    const res = await app.request(postJson({ id: note.id, delete: true }));
+    expect(res.status).toBe(200);
+    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    expect(persisted.notes).toHaveLength(0);
+
+    expect((await app.request(postJson({ id: note.id, delete: true }))).status).toBe(404);
+  });
+
+  test('POST with { clear } empties all notes', async () => {
+    const dir = fixtureRepo();
+    const app = buildApp(dir, fakeDist());
+    await app.request(postJson({ board: 'alpha', node: 'a', text: 'one' }));
+    await app.request(postJson({ board: 'alpha', text: 'two' }));
+
+    const res = await app.request(postJson({ clear: true }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { cleared: number }).cleared).toBe(2);
+    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    expect(persisted.notes).toHaveLength(0);
+    expect((await validateDir(dir)).ok).toBe(true);
+  });
+
   test('GET /api/events is an SSE stream', async () => {
     const app = buildApp(fixtureRepo(), fakeDist());
     const res = await app.request('/api/events');

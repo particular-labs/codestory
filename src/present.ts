@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appendNote, setNoteStatus } from './notes';
+import { appendNote, clearNotes, deleteNote, setNoteStatus } from './notes';
 import { validateDir } from './validate';
 import { watchDir, type DirWatcher } from './watch';
 
@@ -40,15 +40,26 @@ export function buildApp(codestoryDir: string, distDir: string = VIEWER_DIST): H
   });
 
   // Annotations. One boring endpoint dispatches on body shape:
+  //   { clear: true }        → remove every note
+  //   { id, delete: true }   → remove one note
   //   { id, status }         → flip an existing note's status
   //   { board, node?, text } → append a new note (boards stay read-only)
   app.post('/api/notes', async (c) => {
     const body = (await c.req.json().catch(() => null)) as
-      | { id?: string; status?: string; board?: string; node?: string; text?: string }
+      | { id?: string; status?: string; delete?: boolean; clear?: boolean; board?: string; node?: string; text?: string }
       | null;
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
 
+    if (body.clear === true) {
+      return c.json({ cleared: clearNotes(codestoryDir) });
+    }
+
     if (typeof body.id === 'string') {
+      if (body.delete === true) {
+        const removed = deleteNote(codestoryDir, body.id);
+        if (!removed) return c.json({ error: `no note with id '${body.id}'` }, 404);
+        return c.json(removed);
+      }
       if (body.status !== 'open' && body.status !== 'applied') return c.json({ error: 'status must be open|applied' }, 400);
       const updated = setNoteStatus(codestoryDir, body.id, body.status);
       if (!updated) return c.json({ error: `no note with id '${body.id}'` }, 404);

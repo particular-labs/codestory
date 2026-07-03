@@ -59,3 +59,22 @@ export function setNoteStatus(dir: string, id: string, status: NoteStatus): Note
   atomicWrite(dir, file);
   return note;
 }
+
+/** Delete a note by id. Returns the removed note, or null if no such id. */
+export function deleteNote(dir: string, id: string): Note | null {
+  const file = loadForWrite(dir);
+  const i = file.notes.findIndex((n) => n.id === id);
+  if (i < 0) return null;
+  const [removed] = file.notes.splice(i, 1);
+  atomicWrite(dir, file);
+  return removed ?? null;
+}
+
+/** Remove every note. Returns how many were cleared. */
+export function clearNotes(dir: string): number {
+  const file = loadForWrite(dir);
+  const cleared = file.notes.length;
+  file.notes = [];
+  atomicWrite(dir, file);
+  return cleared;
+}
