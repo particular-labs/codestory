@@ -41,10 +41,20 @@ export interface ApiJourney {
   boards: string[];
 }
 
+export interface ApiNote {
+  id: string;
+  board: string;
+  node?: string;
+  text: string;
+  status: 'open' | 'applied';
+  createdAt: string;
+}
+
 export interface ApiData {
   manifest: { project: string; journeys: ApiJourney[] } | null;
   boards: ApiBoard[];
   issues?: Array<{ file: string; message: string }>;
+  notes?: ApiNote[];
 }
 
 export interface AppProps {
@@ -208,6 +218,7 @@ const TYPE_TEXT: Record<string, string> = { step: 'STEP', decision: 'DECISION', 
 interface StackEntry { id: string; callerBoard?: string; callerNode?: string }
 
 interface AppState {
+  data: ApiData; // stateful so SSE live-reload can swap in fresh boards/notes
   theme: 'dark' | 'light';
   view: 'map' | 'board';
   stack: StackEntry[];
@@ -219,6 +230,11 @@ interface AppState {
   mapPos: Record<string, { x: number; y: number }>;
   variantSel: Record<string, string>; // base board id → selected version's board id
   flow: 'horizontal' | 'vertical'; // SSOT for flow direction — every layout/edge/port reads this
+  annotate: boolean; // annotate mode — click a node to leave a change-note
+  notePopover: { board: string; node: string } | null; // open note editor
+  noteDraft: string;
+  promptText: string | null; // clipboard fallback overlay
+  copied: boolean;
 }
 
 const nodeKind = (n: ApiNode) => (n.board ? 'subflow' : n.type);
@@ -229,15 +245,106 @@ const portsSummary = (b: ApiBoard) =>
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
     super(props);
-    this.state = { theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection };
+    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, journey: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow: props.flowDirection, annotate: false, notePopover: null, noteDraft: '', promptText: null, copied: false };
   }
 
   private _d: { byId: Map<string, ApiBoard>; order: string[]; chainEdges: EdgeTuple[]; journeys: ApiJourney[]; variantsByBase: Map<string, ApiBoard[]> } | null = null;
   private _lay: Record<string, Layout> = {};
+  private _es: EventSource | null = null;
+
+  // ── live reload: SSE tells us .codestory/ changed → refetch + re-render, keeping
+  //    the current view/stack/selection wherever those ids still exist ──
+  componentDidMount() {
+    try {
+      const es = new EventSource('/api/events');
+      es.addEventListener('reload', () => { void this.refetch(); });
+      this._es = es;
+    } catch { /* SSE unsupported — no live reload, viewer still works */ }
+  }
+  componentWillUnmount() { this._es?.close(); }
+
+  async refetch() {
+    try {
+      const res = await fetch('/api/boards');
+      if (!res.ok) return;
+      const data = (await res.json()) as ApiData;
+      this._d = null; // board set may have changed → drop derived-graph + layout caches
+      this._lay = {};
+      this.setState((s) => {
+        const byId = new Map(data.boards.map((b) => [b.id, b]));
+        const stack = s.stack.filter((e) => byId.has(e.id));
+        let selectedNodeId = s.selectedNodeId;
+        const top = stack[stack.length - 1];
+        if (top) {
+          const selVar = s.variantSel[top.id];
+          const board = byId.get(selVar && byId.has(selVar) ? selVar : top.id);
+          if (!board?.nodes.some((n) => n.id === selectedNodeId)) selectedNodeId = board?.nodes[0]?.id ?? null;
+        }
+        return { data, stack, selectedNodeId, view: stack.length ? s.view : 'map' };
+      });
+    } catch { /* network blip — keep showing current data */ }
+  }
+
+  // ── notes (annotations) ──
+  allNotes() { return this.state.data.notes ?? []; }
+  openNotes() { return this.allNotes().filter((n) => n.status === 'open'); }
+  openNotesFor(board: string, node: string) { return this.allNotes().filter((n) => n.board === board && n.node === node && n.status === 'open'); }
+
+  async postNote(body: Record<string, unknown>): Promise<boolean> {
+    try {
+      const res = await fetch('/api/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      if (res.ok) await this.refetch(); // snappy update; the file-watch SSE would refetch too
+      return res.ok;
+    } catch { return false; }
+  }
+  async saveNote(board: string, node: string, text: string) {
+    if (!text.trim()) return;
+    const ok = await this.postNote({ board, node, text: text.trim() });
+    if (ok) this.setState({ notePopover: null, noteDraft: '' });
+  }
+  applyNote(id: string) { void this.postNote({ id, status: 'applied' }); }
+
+  /** Serialize every open note + its node context into an LLM-ready markdown block. */
+  buildPrompt(): string {
+    const d = this.d();
+    const out: string[] = [
+      '# Codestory annotations — apply these changes',
+      '',
+      'Each note below requests a change against a node in the codestory boards under `.codestory/`. For each note, edit the referenced board JSON and/or the code it points to, then mark the note applied.',
+      '',
+    ];
+    this.openNotes().forEach((note, i) => {
+      const board = d.byId.get(note.board);
+      const node = note.node ? board?.nodes.find((n) => n.id === note.node) : undefined;
+      out.push(`## Note ${i + 1}`);
+      out.push(`- board: \`${note.board}\`${board ? ` (${board.title})` : ''}`);
+      if (node) {
+        out.push(`- node: \`${node.id}\` — ${nodeTitle(node)}`);
+        if (node.refs?.length) out.push(`- refs: ${node.refs.join(', ')}`);
+        if (node.contract) out.push(`- contract: in ${node.contract.in ?? '—'} → out ${node.contract.out ?? '—'}`);
+        if (node.acceptance?.length) { out.push('- acceptance:'); node.acceptance.forEach((a) => out.push(`  - ${a}`)); }
+      } else if (note.node) {
+        out.push(`- node: \`${note.node}\``);
+      }
+      out.push(`- change requested: ${note.text}`);
+      out.push('');
+    });
+    return out.join('\n');
+  }
+  async copyPrompt() {
+    const text = this.buildPrompt();
+    try {
+      await navigator.clipboard.writeText(text);
+      this.setState({ copied: true });
+      setTimeout(() => this.setState({ copied: false }), 1500);
+    } catch {
+      this.setState({ promptText: text }); // fallback: show a selectable textarea
+    }
+  }
 
   d() {
     if (this._d) return this._d;
-    const { boards, manifest } = this.props.data;
+    const { boards, manifest } = this.state.data;
     const byId = new Map(boards.map((b) => [b.id, b]));
     const variantsByBase = new Map<string, ApiBoard[]>();
     boards.forEach((b) => {
@@ -369,7 +476,12 @@ export class App extends React.Component<AppProps, AppState> {
     const up = () => {
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
-      if (!moved) { if (kind === 'map') this.enterBoard(id); else this.selectNode(id); }
+      if (moved) return;
+      if (kind === 'map') { this.enterBoard(id); return; }
+      this.selectNode(id);
+      // annotate mode: a click also opens the note editor for this node
+      const board = this.curBoard();
+      if (this.state.annotate && board) this.setState({ notePopover: { board: board.id, node: id }, noteDraft: '' });
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -523,6 +635,7 @@ export class App extends React.Component<AppProps, AppState> {
       const status = n.status ?? 'planned';
       return {
         id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subBoard: n.board, diff: nodeDiff(n),
+        noteCount: boardId ? this.openNotesFor(boardId, n.id).length : 0,
         dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${status})`, flex: '0 0 auto' } as React.CSSProperties,
         style: { position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
         onMouseDown: (e: React.MouseEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
@@ -562,9 +675,9 @@ export class App extends React.Component<AppProps, AppState> {
           <div style={css('display:flex;align-items:center;gap:9px;')}>
             <div style={css('width:15px;height:15px;border-radius:4px;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft);')}></div>
             <span style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>codestory</span>
-            <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.props.data.manifest?.project ?? 'codestory present'}</span>
-            {(this.props.data.issues?.length ?? 0) > 0 && (
-              <span title={this.props.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.props.data.issues!.length} validate issue(s) — boards may be missing</span>
+            <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.state.data.manifest?.project ?? 'codestory present'}</span>
+            {(this.state.data.issues?.length ?? 0) > 0 && (
+              <span title={this.state.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.state.data.issues!.length} validate issue(s) — boards may be missing</span>
             )}
           </div>
 
@@ -588,6 +701,7 @@ export class App extends React.Component<AppProps, AppState> {
               <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--built);')}></span>built</span>
               <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
             </div>
+            <button title={this.state.annotate ? 'Annotate mode ON — click a node to leave a note' : 'Annotate mode — leave change-notes on nodes'} onClick={() => this.setState((s) => ({ annotate: !s.annotate, notePopover: null }))} style={{ width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.annotate ? 'var(--accent)' : 'var(--border)'}`, background: this.state.annotate ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.annotate ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✎</button>
             <button title={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? '⇅' : '⇄'}</button>
             <button onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? '☀' : '☾'}</button>
           </div>
@@ -726,6 +840,9 @@ export class App extends React.Component<AppProps, AppState> {
                         <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);display:flex;align-items:center;gap:5px;")}>{n.glyph}{n.typeText}</span>
                           <span style={css('display:flex;align-items:center;gap:5px;')}>
+                            {n.noteCount > 0 && (
+                              <span title={`${n.noteCount} open note${n.noteCount > 1 ? 's' : ''}`} style={css("font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;color:var(--accentFg);background:var(--accent);border-radius:9px;min-width:14px;height:14px;padding:0 4px;display:flex;align-items:center;justify-content:center;")}>✎{n.noteCount}</span>
+                            )}
                             {n.diff && (
                               <span style={css("font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:4px;padding:1px 5px;")}>{n.diff === 'new' ? '+ new' : 'Δ'}</span>
                             )}
@@ -742,8 +859,34 @@ export class App extends React.Component<AppProps, AppState> {
                         )}
                       </div>
                     ))}
+                    {this.state.notePopover && this.state.notePopover.board === boardId && boardRects[this.state.notePopover.node] && (
+                      <div
+                        onMouseDown={(e) => e.stopPropagation()}
+                        style={{ position: 'absolute', left: boardRects[this.state.notePopover.node]!.x, top: boardRects[this.state.notePopover.node]!.y + NODE_H + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
+                      >
+                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.state.notePopover.node}</div>
+                        <textarea
+                          autoFocus
+                          value={this.state.noteDraft}
+                          onChange={(e) => this.setState({ noteDraft: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.state.notePopover!.board, this.state.notePopover!.node, this.state.noteDraft); } if (e.key === 'Escape') this.setState({ notePopover: null }); }}
+                          placeholder="What should change here?"
+                          style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: 12.5, fontFamily: 'inherit', outline: 'none' }}
+                        />
+                        <div style={css('display:flex;align-items:center;justify-content:flex-end;gap:7px;')}>
+                          <button onClick={() => this.setState({ notePopover: null, noteDraft: '' })} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
+                          <button onClick={() => void this.saveNote(this.state.notePopover!.board, this.state.notePopover!.node, this.state.noteDraft)} disabled={!this.state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.state.noteDraft.trim() ? 'pointer' : 'default', opacity: this.state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
+                {this.openNotes().length > 0 && (
+                  <button
+                    onClick={() => void this.copyPrompt()}
+                    style={{ position: 'absolute', right: 16, bottom: 72, zIndex: 15, height: 34, padding: '0 14px', borderRadius: 8, border: '1px solid var(--accent)', background: this.state.copied ? 'var(--built)' : 'var(--accent)', color: 'var(--accentFg)', fontSize: 12.5, fontWeight: 600, boxShadow: 'var(--shadow)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7 }}
+                  >{this.state.copied ? '✓ Copied prompt' : `⧉ Copy ${this.openNotes().length} note${this.openNotes().length > 1 ? 's' : ''} as prompt`}</button>
+                )}
 
                 <div style={css('flex:0 0 auto;border-top:1px solid var(--border);background:var(--surface);z-index:10;')}>
                   <div style={css('min-height:56px;display:flex;align-items:center;gap:14px;padding:9px 16px;')}>
@@ -817,6 +960,27 @@ export class App extends React.Component<AppProps, AppState> {
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:5px;padding:4px 9px;")}>{selNode.ticket}</span>
                         </div>
                       )}
+
+                      {(() => {
+                        const notes = this.allNotes().filter((n) => n.board === boardId && n.node === selNode.id);
+                        if (!notes.length) return null;
+                        return (
+                          <div style={css('flex:0 0 auto;max-width:320px;')}>
+                            <div style={css('font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);margin-bottom:8px;')}>Notes</div>
+                            <div style={css('display:flex;flex-direction:column;gap:6px;')}>
+                              {notes.map((n) => (
+                                <div key={n.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, lineHeight: 1.4, opacity: n.status === 'applied' ? 0.55 : 1 }}>
+                                  <span style={{ ...statusPill(n.status === 'applied' ? 'built' : 'drifted'), flex: '0 0 auto', marginTop: 1 }}>{n.status}</span>
+                                  <span style={{ color: 'var(--fg)', textDecoration: n.status === 'applied' ? 'line-through' : 'none' }}>{n.text}</span>
+                                  {n.status === 'open' && (
+                                    <button onClick={() => this.applyNote(n.id)} title="Mark applied" style={css('flex:0 0 auto;margin-left:auto;height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--built);background:transparent;color:var(--built);font-size:10.5px;font-weight:600;cursor:pointer;')}>Applied</button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -824,6 +988,25 @@ export class App extends React.Component<AppProps, AppState> {
             )}
           </div>
         </div>
+
+        {this.state.promptText !== null && (
+          <div onMouseDown={() => this.setState({ promptText: null })} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
+            <div onMouseDown={(e) => e.stopPropagation()} style={css('width:560px;max-width:90vw;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;gap:12px;')}>
+              <div style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>Copy prompt manually</div>
+              <div style={css('font-size:12px;color:var(--dim);line-height:1.5;')}>Clipboard access was blocked — select all and copy the block below.</div>
+              <textarea
+                readOnly
+                autoFocus
+                value={this.state.promptText}
+                onFocus={(e) => e.currentTarget.select()}
+                style={{ width: '100%', height: 260, resize: 'vertical', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: 12, fontSize: 12, fontFamily: mono, outline: 'none' }}
+              />
+              <div style={css('display:flex;justify-content:flex-end;')}>
+                <button onClick={() => this.setState({ promptText: null })} style={css('height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>Done</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
