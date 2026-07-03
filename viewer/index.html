@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>codestory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+button{font:inherit;cursor:pointer;}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px;}
+::-webkit-scrollbar-thumb:hover{background:var(--borderStrong);}
+::-webkit-scrollbar-track{background:transparent;}
+@keyframes fadeZoom{from{transform:scale(.985);}to{transform:scale(1);}}
+@keyframes slideUp{from{transform:translateY(10px);}to{transform:translateY(0);}}
+@keyframes panelUp{from{transform:translateY(14px);}to{transform:translateY(0);}}
+@keyframes dashFlow{to{stroke-dashoffset:-16;}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
