@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type ExportOpts } from './export';
+import { frameOffset } from './frame';
 import { Ic } from './icons';
 import { loadSettings, saveSettings } from './settings';
 import { type Loc, parseLocation, serializeLocation } from './urlState';
@@ -317,6 +318,7 @@ const portsSummary = (b: ApiJourney) =>
 
 /** The shareable location embedded in app state (drives urlState serialization). */
 const locOf = (s: AppState): Loc => ({ path: s.stack.map((e) => e.id), node: s.selectedNodeId, persona: s.persona, variants: s.variantSel });
+
 
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
@@ -762,7 +764,13 @@ export class App extends React.Component<AppProps, AppState> {
         onPointerDown: (e: React.PointerEvent) => this.startDrag('map', id, mkey, px, py, e),
       };
     });
-    const mapDims = { w: vertical ? chainLayout.w : Math.max(chainLayout.w, 480), h: Math.max(chainLayout.h, 360) };
+    // shift so a dragged-left card stays reachable, then size the canvas to fit
+    const mf = frameOffset(Object.values(mapRects));
+    if (mf.dx || mf.dy) {
+      for (const id in mapRects) { mapRects[id]!.x += mf.dx; mapRects[id]!.y += mf.dy; }
+      for (const c of mapCards) { c.style.left = (c.style.left as number) + mf.dx; c.style.top = (c.style.top as number) + mf.dy; }
+    }
+    const mapDims = { w: Math.max(vertical ? chainLayout.w : Math.max(chainLayout.w, 480), mf.w), h: Math.max(360, mf.h) };
     const chainEdgesEl = edgesSvg(d.chainEdges, mapRects, mapDims, personaSet, null, null, vertical);
 
     // personas rail
@@ -871,6 +879,9 @@ export class App extends React.Component<AppProps, AppState> {
     };
     const journeyRects: Record<string, Rect> = {};
     (hasVariants ? unionNodes : ns).forEach((n) => { const p = eff(n); journeyRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: estimateNodeH(n) }; });
+    // frame offset: keep left/up-dragged nodes reachable, then rects hold rendered coords
+    const jf = frameOffset(Object.values(journeyRects));
+    if (jf.dx || jf.dy) for (const id in journeyRects) { journeyRects[id]!.x += jf.dx; journeyRects[id]!.y += jf.dy; }
 
     // diff vs the base (only meaningful when a variant is displayed)
     const baseNodeById = new Map((baseJourney?.nodes ?? []).map((n) => [n.id, n]));
@@ -896,12 +907,14 @@ export class App extends React.Component<AppProps, AppState> {
         id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subJourney: n.journey, diff: nodeDiff(n),
         noteCount: journeyId ? this.openNotesFor(journeyId, n.id).length : 0,
         dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${status})`, flex: '0 0 auto' } as React.CSSProperties,
-        style: { position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
+        style: { position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
         onPointerDown: (e: React.PointerEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
       };
     });
-    // vertical: hug the true content width so margin:auto centers the flow (not a padded box); horizontal keeps a min width
-    const journeyDims = lay ? { w: vertical ? lay.w : Math.max(lay.w, 480), h: Math.max(lay.h, 360) } : { w: 480, h: 360 };
+    // vertical: hug content width so margin:auto centers the flow; horizontal keeps a
+    // min width; both grow to the framed extent so dragged-out nodes stay scrollable
+    const baseW = vertical ? (lay?.w ?? 480) : Math.max(lay?.w ?? 480, 480);
+    const journeyDims = lay ? { w: Math.max(baseW, jf.w), h: Math.max(360, jf.h) } : { w: 480, h: 360 };
     const journeyEdgeTuples: EdgeTuple[] = (journey?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
     const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.state.selectedNodeId, (id) => this.selectNode(id), vertical) : null;
 
@@ -1191,7 +1204,7 @@ export class App extends React.Component<AppProps, AppState> {
                       const p = eff(n);
                       const kind = nodeKind(n);
                       return (
-                        <div key={'ghost-' + n.id} data-export-node data-ghost style={{ position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
+                        <div key={'ghost-' + n.id} data-export-node data-ghost style={{ position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
                           <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                             <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);")}>{GLYPHS[kind]}{TYPE_TEXT[kind]}</span>
                           </div>
