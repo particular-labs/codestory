@@ -291,6 +291,7 @@ interface AppState {
   promptText: string | null; // clipboard fallback overlay
   copied: boolean;
   isNarrow: boolean; // phone viewport (matchMedia SSOT) — drives responsive layout
+  versionsOpen: boolean; // narrow only: version picker expanded from its pill
   drawerOpen: boolean; // narrow-only: left rail overlay drawer open
 }
 
@@ -315,7 +316,7 @@ export class App extends React.Component<AppProps, AppState> {
     const isNarrow = narrowMql()?.matches ?? false;
     // precedence: explicit URL/saved flow > narrow ? vertical : horizontal
     const flow = props.flowDirection ?? (isNarrow ? 'vertical' : 'horizontal');
-    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: true, nodePos: {}, mapPos: {}, variantSel: {}, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false };
+    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: !isNarrow, nodePos: {}, mapPos: {}, variantSel: {}, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false };
   }
 
   private _d: { byId: Map<string, ApiJourney>; order: string[]; chainEdges: EdgeTuple[]; personas: ApiPersona[]; variantsByBase: Map<string, ApiJourney[]>; subsByJourney: Map<string, string[]> } | null = null;
@@ -498,7 +499,8 @@ export class App extends React.Component<AppProps, AppState> {
     return this.d().byId.get(sel ?? e.id) ?? null;
   }
   setVariant(baseId: string, journeyId: string) {
-    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: journeyId }, selectedNodeId: this.firstNode(journeyId) }));
+    // versionsOpen: on phones the picker collapses back to its pill after a choice
+    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: journeyId }, selectedNodeId: this.firstNode(journeyId), versionsOpen: false }));
   }
   /** The journey id actually displayed for a base id (its selected variant, else itself). */
   displayedId(baseId: string) { return this.state.variantSel[baseId] ?? baseId; }
@@ -1051,9 +1053,20 @@ export class App extends React.Component<AppProps, AppState> {
                     </div>
                   </div>
                 )}
-                {hasVariants && (
+                {hasVariants && isNarrow && !this.state.versionsOpen && (
+                  <button
+                    onClick={() => this.setState({ versionsOpen: true })}
+                    style={css('position:absolute;right:12px;top:12px;z-index:8;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;box-shadow:var(--shadow);')}
+                  >⑂ {journey?.variantOf ? journey.variantLabel ?? journey.id : 'Current'} ▾</button>
+                )}
+                {hasVariants && (!isNarrow || this.state.versionsOpen) && (
                   <div style={{ ...css('position:absolute;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);overflow-y:auto;animation:slideUp 200ms ease;'), right: 14, left: isNarrow ? 12 : 'auto', maxHeight: isNarrow ? '45vh' : 'none' }}>
-                    <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
+                    <div style={css('display:flex;align-items:center;')}>
+                      <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
+                      {isNarrow && (
+                        <button onClick={() => this.setState({ versionsOpen: false })} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);font-size:15px;cursor:pointer;padding:0;')}>✕</button>
+                      )}
+                    </div>
                     {versions.map((v) => (
                       <label key={v.id} style={css('display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);cursor:pointer;')}>
                         <input
@@ -1139,21 +1152,49 @@ export class App extends React.Component<AppProps, AppState> {
                   </div>
                 </div>
                 <div style={css('flex:0 0 auto;border-top:1px solid var(--border);background:var(--surface);z-index:10;')}>
-                  <div style={{ ...css('min-height:56px;display:flex;align-items:center;'), flexWrap: isNarrow ? 'wrap' : 'nowrap', gap: isNarrow ? '8px 10px' : 14, padding: isNarrow ? '9px 12px' : '9px 16px' }}>
-                    <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
-                      <button data-tip="Previous node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
-                      <button data-tip="Next node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
-                    </div>
-                    <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>
-                    <div style={css('flex:0 0 120px;height:4px;border-radius:3px;background:var(--inset);overflow:hidden;')}>
-                      <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', borderRadius: 3, transition: 'width 220ms ease' }}></div>
-                    </div>
-                    <div style={css('flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--fg);line-height:1.45;')}>{narration}</div>
-                    {cont && (
-                      <button onClick={cont.onClick} style={css('flex:0 0 auto;height:32px;padding:0 13px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;animation:slideUp 220ms ease;')}>{cont.label}</button>
-                    )}
-                    <button data-tip={this.state.detailOpen ? 'Hide node detail' : 'Show node detail'} data-tip-pos="up" onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))} style={css('flex:0 0 auto;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:11px;')}>{this.state.detailOpen ? '▾' : '▴'}</button>
-                  </div>
+                  {(() => {
+                    const detailToggle = (
+                      <button
+                        data-tip={this.state.detailOpen ? 'Hide node detail' : 'Show node detail'}
+                        data-tip-pos="up"
+                        onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))}
+                        style={{ ...css('border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);'), flex: '0 0 auto', marginLeft: 'auto', width: isNarrow ? 36 : 30, height: isNarrow ? 36 : 30, fontSize: isNarrow ? 16 : 14 }}
+                      >{this.state.detailOpen ? '▾' : '▴'}</button>
+                    );
+                    const navGroup = (
+                      <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
+                        <button data-tip="Previous node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
+                        <button data-tip="Next node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
+                      </div>
+                    );
+                    const stepChip = <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>;
+                    const progress = (grow: boolean) => (
+                      <div style={{ ...css('height:4px;border-radius:3px;background:var(--inset);overflow:hidden;'), flex: grow ? '1 1 auto' : '0 0 120px' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', borderRadius: 3, transition: 'width 220ms ease' }}></div>
+                      </div>
+                    );
+                    const contChip = cont && (
+                      <button onClick={cont.onClick} style={{ ...css('height:32px;padding:0 13px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;animation:slideUp 220ms ease;'), flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cont.label}</button>
+                    );
+                    return isNarrow ? (
+                      // phone: controls row (chevron pinned right), then narration row — canvas keeps its space
+                      <div style={css('display:flex;flex-direction:column;gap:7px;padding:8px 12px;')}>
+                        <div style={css('display:flex;align-items:center;gap:10px;')}>
+                          {navGroup}{stepChip}{progress(true)}{detailToggle}
+                        </div>
+                        <div style={css('display:flex;align-items:center;gap:8px;')}>
+                          <div style={{ ...css('flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--fg);line-height:1.4;'), display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{narration}</div>
+                          {contChip}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={css('min-height:56px;display:flex;align-items:center;gap:14px;padding:9px 16px;')}>
+                        {navGroup}{stepChip}{progress(false)}
+                        <div style={css('flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--fg);line-height:1.45;')}>{narration}</div>
+                        {contChip}{detailToggle}
+                      </div>
+                    );
+                  })()}
 
                   {detailShown && selNode && (
                     <div style={{ ...css('border-top:1px solid var(--border);padding:16px 18px;display:flex;flex-wrap:wrap;gap:14px 34px;overflow-y:auto;animation:panelUp 200ms ease;'), maxHeight: isNarrow ? '50vh' : 236 }}>
