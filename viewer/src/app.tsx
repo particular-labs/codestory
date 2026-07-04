@@ -1,5 +1,5 @@
-import { toPng } from 'html-to-image';
 import * as React from 'react';
+import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type ExportOpts } from './export';
 import { Ic } from './icons';
 import { saveSetting } from './settings';
 
@@ -294,6 +294,8 @@ interface AppState {
   isNarrow: boolean; // phone viewport (matchMedia SSOT) — drives responsive layout
   versionsOpen: boolean; // narrow only: version picker expanded from its pill
   drawerOpen: boolean; // narrow-only: left rail overlay drawer open
+  exportOpen: boolean; // export-options popover open
+  exportOpts: ExportOpts; // what to bake into the PNG (all on by default)
 }
 
 const nodeKind = (n: ApiNode) => (n.journey ? 'subflow' : n.type);
@@ -317,7 +319,7 @@ export class App extends React.Component<AppProps, AppState> {
     const isNarrow = narrowMql()?.matches ?? false;
     // precedence: explicit URL/saved flow > narrow ? vertical : horizontal
     const flow = props.flowDirection ?? (isNarrow ? 'vertical' : 'horizontal');
-    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: !isNarrow, nodePos: {}, mapPos: {}, variantSel: {}, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false };
+    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: !isNarrow, nodePos: {}, mapPos: {}, variantSel: {}, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false, exportOpen: false, exportOpts: { ...DEFAULT_EXPORT_OPTS } };
   }
 
   private _d: { byId: Map<string, ApiJourney>; order: string[]; chainEdges: EdgeTuple[]; personas: ApiPersona[]; variantsByBase: Map<string, ApiJourney[]>; subsByJourney: Map<string, string[]> } | null = null;
@@ -541,31 +543,27 @@ export class App extends React.Component<AppProps, AppState> {
   toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSetting('theme', theme); return { theme }; }); }
 
   private canvasEl = React.createRef<HTMLDivElement>();
-  /** Export the visible canvas (chain map or current journey) as a 2x PNG. The
-   *  clone detaches from the root that defines our CSS vars, and html-to-image's
-   *  `style` option can't set custom properties (Object.assign, not setProperty) —
-   *  so pin the tokens inline on the real element for the capture, then restore. */
+  /** Export the visible canvas (chain map or current journey) as a framed 2x PNG:
+   *  header + background grid + centered padding + legend, per the export-options.
+   *  The heavy DOM assembly lives in export.ts; here we just supply theme + meta. */
   async exportPng() {
     const el = this.canvasEl.current;
     if (!el) return;
-    const t: Record<string, string> = { ...THEMES[this.state.theme], accent: this.props.accent || THEMES[this.state.theme].accent };
-    const prevCss = el.style.cssText;
-    Object.keys(t).forEach((k) => el.style.setProperty('--' + k, t[k]!));
-    el.style.fontFamily = '-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif';
-    let dataUrl: string;
-    try {
-      dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: t.bg });
-    } finally {
-      el.style.cssText = prevCss;
-    }
+    const vars: Record<string, string> = { ...THEMES[this.state.theme], accent: this.props.accent || THEMES[this.state.theme].accent };
+    const journey = this.curJourney();
+    const project = this.props.data.manifest?.project ?? 'codestory';
+    const title = journey
+      ? `${journey.title}${journey.variantOf && journey.variantLabel ? ` — ${journey.variantLabel}` : ''}`
+      : `${project} — Root`;
+    const meta = journey
+      ? { title, subtitle: portsSummary(journey), legend: summarize(journey.nodes) }
+      : { title, subtitle: `${this.d().order.length} journeys · ${this.props.data.manifest?.personas?.length ?? 0} personas`, legend: `${this.d().order.length} journeys` };
+    const dataUrl = await composeExportPng(el, vars, meta, this.state.exportOpts);
     const a = document.createElement('a');
     a.href = dataUrl;
-    const journey = this.curJourney();
-    const name = journey
-      ? `${journey.title}${journey.variantOf && journey.variantLabel ? ` — ${journey.variantLabel}` : ''}`
-      : `${this.props.data.manifest?.project ?? 'codestory'} — Root`;
-    a.download = `${name.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
+    a.download = `${title.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
     a.click();
+    this.setState({ exportOpen: false });
   }
   toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSetting('flow', flow); return { flow }; }); }
 
@@ -694,7 +692,7 @@ export class App extends React.Component<AppProps, AppState> {
         onPointerDown: (e: React.PointerEvent) => this.startDrag('map', id, mkey, px, py, e),
       };
     });
-    const mapDims = { w: Math.max(chainLayout.w, 480), h: Math.max(chainLayout.h, 360) };
+    const mapDims = { w: vertical ? chainLayout.w : Math.max(chainLayout.w, 480), h: Math.max(chainLayout.h, 360) };
     const chainEdgesEl = edgesSvg(d.chainEdges, mapRects, mapDims, personaSet, null, null, vertical);
 
     // personas rail
@@ -832,7 +830,8 @@ export class App extends React.Component<AppProps, AppState> {
         onPointerDown: (e: React.PointerEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
       };
     });
-    const journeyDims = lay ? { w: Math.max(lay.w, 480), h: Math.max(lay.h, 360) } : { w: 480, h: 360 };
+    // vertical: hug the true content width so margin:auto centers the flow (not a padded box); horizontal keeps a min width
+    const journeyDims = lay ? { w: vertical ? lay.w : Math.max(lay.w, 480), h: Math.max(lay.h, 360) } : { w: 480, h: 360 };
     const journeyEdgeTuples: EdgeTuple[] = (journey?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
     const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.state.selectedNodeId, (id) => this.selectNode(id), vertical) : null;
 
@@ -922,7 +921,7 @@ export class App extends React.Component<AppProps, AppState> {
               )}
             </button>
             <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? <Ic n="arrows-ud" size={15} /> : <Ic n="arrows-lr" size={15} />}</button>
-            <button data-tip="Export view as PNG" onClick={() => void this.exportPng()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n="download" size={15} /></button>
+            <button data-tip="Export view as PNG" onClick={() => this.setState((s) => ({ exportOpen: !s.exportOpen, notesOpen: false }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.exportOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.exportOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.exportOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic n="download" size={15} /></button>
             <button data-tip={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? <Ic n="sun" size={15} /> : <Ic n="moon" size={15} />}</button>
           </div>
         </div>
@@ -966,6 +965,29 @@ export class App extends React.Component<AppProps, AppState> {
                 <button onClick={() => this.clearNotes()} title="Delete all notes" style={css('flex:0 0 auto;height:30px;padding:0 11px;border-radius:7px;border:1px solid var(--borderStrong);background:var(--inset);color:var(--dim);font-size:11.5px;font-weight:600;cursor:pointer;')}>Clear all</button>
               </div>
             )}
+          </div>
+        )}
+
+        {this.state.exportOpen && (
+          <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 280 }}>
+            <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
+              <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Export PNG</div>
+              <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Choose what to include.</div>
+            </div>
+            <div style={css('padding:8px 10px;display:flex;flex-direction:column;gap:2px;')}>
+              {EXPORT_TOGGLES.map(({ key, label }) => {
+                const on = this.state.exportOpts[key];
+                return (
+                  <button key={key} onClick={() => this.setState((s) => ({ exportOpts: { ...s.exportOpts, [key]: !s.exportOpts[key] } }))} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
+                    <span style={{ flex: '0 0 auto', width: 16, height: 16, borderRadius: 5, border: `1px solid ${on ? 'var(--accent)' : 'var(--borderStrong)'}`, background: on ? 'var(--accent)' : 'transparent', color: 'var(--accentFg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <Ic n="check" size={11} />}</span>
+                    <span style={css('font-size:12.5px;')}>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={css('padding:10px 12px;border-top:1px solid var(--border);')}>
+              <button onClick={() => void this.exportPng()} style={css('width:100%;height:32px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12px;font-weight:650;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;')}><Ic n="download" size={14} />Export PNG</button>
+            </div>
           </div>
         )}
 
@@ -1016,10 +1038,10 @@ export class App extends React.Component<AppProps, AppState> {
           <div style={css('flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;')}>
             {isMap && (
               <div style={css('flex:1 1 auto;position:relative;overflow:auto;background:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;animation:fadeZoom 240ms ease;')}>
-                <div ref={this.canvasEl} style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: 32 }}>
+                <div ref={this.canvasEl} style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: vertical ? '32px auto' : 32 }}>
                   <div style={css('position:absolute;left:0;top:0;')}>{chainEdgesEl}</div>
                   {mapCards.map((m) => (
-                    <div key={m.id} onPointerDown={m.onPointerDown} style={m.style}>
+                    <div key={m.id} data-export-node onPointerDown={m.onPointerDown} style={m.style}>
                       <span style={m.entryPort}></span>
                       <span style={m.exitPort}></span>
                       <div style={css('display:flex;align-items:center;justify-content:space-between;')}>
@@ -1089,7 +1111,7 @@ export class App extends React.Component<AppProps, AppState> {
                     <div style={css('font-size:17px;font-weight:650;letter-spacing:-0.015em;')}>{journey?.title}</div>
                     <div style={css('font-size:12px;color:var(--dim);margin-top:2px;')}>{journey ? portsSummary(journey) : ''}</div>
                   </div>
-                  <div ref={this.canvasEl} style={{ position: 'relative', width: journeyDims.w, height: journeyDims.h, margin: '64px 40px 40px' }}>
+                  <div ref={this.canvasEl} style={{ position: 'relative', width: journeyDims.w, height: journeyDims.h, margin: vertical ? '64px auto 40px' : '64px 40px 40px' }}>
                     {ghostEdges.length > 0 && (
                       <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, journeyRects, journeyDims, null, null, null, vertical)}</div>
                     )}
@@ -1098,7 +1120,7 @@ export class App extends React.Component<AppProps, AppState> {
                       const p = eff(n);
                       const kind = nodeKind(n);
                       return (
-                        <div key={'ghost-' + n.id} style={{ position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
+                        <div key={'ghost-' + n.id} data-export-node data-ghost style={{ position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
                           <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                             <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);")}>{GLYPHS[kind]}{TYPE_TEXT[kind]}</span>
                           </div>
@@ -1107,7 +1129,7 @@ export class App extends React.Component<AppProps, AppState> {
                       );
                     })}
                     {journeyNodes.map((n) => (
-                      <div key={n.id} onPointerDown={n.onPointerDown} style={n.style}>
+                      <div key={n.id} data-export-node onPointerDown={n.onPointerDown} style={n.style}>
                         <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);display:flex;align-items:center;gap:5px;")}>{n.glyph}{n.typeText}</span>
                           <span style={css('display:flex;align-items:center;gap:5px;')}>
