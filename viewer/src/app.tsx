@@ -552,16 +552,20 @@ export class App extends React.Component<AppProps, AppState> {
     const vars: Record<string, string> = { ...THEMES[this.state.theme], accent: this.props.accent || THEMES[this.state.theme].accent };
     const journey = this.curJourney();
     const project = this.props.data.manifest?.project ?? 'codestory';
-    const title = journey
+    const flowName = journey
       ? `${journey.title}${journey.variantOf && journey.variantLabel ? ` — ${journey.variantLabel}` : ''}`
-      : `${project} — Root`;
+      : 'Root';
     const meta = journey
-      ? { title, subtitle: portsSummary(journey), legend: summarize(journey.nodes) }
-      : { title, subtitle: `${this.d().order.length} journeys · ${this.props.data.manifest?.personas?.length ?? 0} personas`, legend: `${this.d().order.length} journeys` };
+      ? { title: flowName, subtitle: portsSummary(journey), legend: summarize(journey.nodes) }
+      : { title: `${project} — Root`, subtitle: `${this.d().order.length} journeys · ${this.props.data.manifest?.personas?.length ?? 0} personas`, legend: `${this.d().order.length} journeys` };
     const dataUrl = await composeExportPng(el, vars, meta, this.state.exportOpts);
     const a = document.createElement('a');
     a.href = dataUrl;
-    a.download = `${title.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
+    // every file leads with the app name, then the flow, then the date: "<app> — <flow> - DD-MM-YYYY.png"
+    const n = new Date();
+    const p2 = (x: number) => String(x).padStart(2, '0');
+    const date = `${p2(n.getDate())}-${p2(n.getMonth() + 1)}-${n.getFullYear()}`;
+    a.download = `${`${project} — ${flowName} - ${date}`.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
     a.click();
     this.setState({ exportOpen: false });
   }
