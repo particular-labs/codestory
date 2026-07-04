@@ -690,7 +690,9 @@ export class App extends React.Component<AppProps, AppState> {
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
       if (!moved && Math.abs(dx) + Math.abs(dy) > 3) moved = true;
       if (!moved) return;
-      const p = { x: Math.max(0, baseX + dx), y: Math.max(0, baseY + dy) };
+      // no lower clamp — a node must be draggable left/up too, not pinned at the
+      // canvas origin (the old Math.max(0,…) stopped any leftward move dead at x=0)
+      const p = { x: baseX + dx, y: baseY + dy };
       if (kind === 'map') this.setState((s) => ({ mapPos: { ...s.mapPos, [key]: p } }));
       else this.setState((s) => ({ nodePos: { ...s.nodePos, [key]: p } }));
     };
