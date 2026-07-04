@@ -1174,8 +1174,9 @@ export class App extends React.Component<AppProps, AppState> {
                         <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', borderRadius: 3, transition: 'width 220ms ease' }}></div>
                       </div>
                     );
-                    const contChip = cont && (
-                      <button onClick={cont.onClick} style={{ ...css('height:32px;padding:0 13px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;animation:slideUp 220ms ease;'), flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cont.label}</button>
+                    // block=true → full-width own-row button (phone: no horizontal squeeze, so no clipping)
+                    const contChip = (block: boolean) => cont && (
+                      <button onClick={cont.onClick} style={{ ...css('border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;animation:slideUp 220ms ease;'), ...(block ? { width: '100%', minHeight: 38, padding: '8px 13px', lineHeight: 1.3, textAlign: 'center' as const } : { height: 32, padding: '0 13px', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }}>{cont.label}</button>
                     );
                     return isNarrow ? (
                       // phone: controls row (chevron pinned right), then narration row — canvas keeps its space
@@ -1183,16 +1184,14 @@ export class App extends React.Component<AppProps, AppState> {
                         <div style={css('display:flex;align-items:center;gap:10px;')}>
                           {navGroup}{stepChip}{progress(true)}{detailToggle}
                         </div>
-                        <div style={css('display:flex;align-items:center;gap:8px;')}>
-                          <div style={{ ...css('flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--fg);line-height:1.4;'), display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{narration}</div>
-                          {contChip}
-                        </div>
+                        <div style={{ ...css('font-size:12.5px;color:var(--fg);line-height:1.4;'), display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{narration}</div>
+                        {contChip(true)}
                       </div>
                     ) : (
                       <div style={css('min-height:56px;display:flex;align-items:center;gap:14px;padding:9px 16px;')}>
                         {navGroup}{stepChip}{progress(false)}
                         <div style={css('flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--fg);line-height:1.45;')}>{narration}</div>
-                        {contChip}{detailToggle}
+                        {contChip(false)}{detailToggle}
                       </div>
                     );
                   })()}
