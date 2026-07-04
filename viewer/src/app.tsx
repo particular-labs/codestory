@@ -3,7 +3,7 @@ import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type 
 import { frameOffset } from './frame';
 import { Ic } from './icons';
 import { loadSettings, saveSettings } from './settings';
-import { type Loc, parseLocation, serializeLocation } from './urlState';
+import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlState';
 
 // ── API projection (viewer-local; SSOT is src/schema.ts, this is read-only) ──
 
@@ -316,8 +316,9 @@ const sizedNode = (n: ApiNode): SizedNode => ({ id: n.id, w: NODE_W, h: estimate
 const portsSummary = (b: ApiJourney) =>
   [b.entries.length ? `entry: ${b.entries.join(', ')}` : '', b.exits.length ? `exits: ${b.exits.join(', ')}` : ''].filter(Boolean).join(' · ');
 
-/** The shareable location embedded in app state (drives urlState serialization). */
-const locOf = (s: AppState): Loc => ({ path: s.stack.map((e) => e.id), node: s.selectedNodeId, persona: s.persona, variants: s.variantSel });
+/** The shareable location embedded in app state (drives urlState serialization).
+ *  relevantLoc drops params that don't apply to the current view so nothing sticks. */
+const locOf = (s: AppState): Loc => relevantLoc({ path: s.stack.map((e) => e.id), node: s.selectedNodeId, persona: s.persona, variants: s.variantSel });
 
 
 export class App extends React.Component<AppProps, AppState> {
@@ -588,7 +589,7 @@ export class App extends React.Component<AppProps, AppState> {
     this.setState((s) => ({ stack: [...s.stack, { id: subId, callerJourney: cur.id, callerNode }], selectedNodeId: this.firstNode(this.displayedId(subId)) }));
   }
   goCrumb(k: number) {
-    if (k === 0) { this.setState({ view: 'map', persona: null }); return; } // Root = whole map, no lens
+    if (k === 0) { this.setState({ view: 'map', stack: [], selectedNodeId: null, persona: null }); return; } // Root = whole map, no lens/journey (clears the stack so the URL doesn't keep the old journey)
     this.setState((s) => {
       const st = s.stack.slice(0, k);
       return { stack: st, selectedNodeId: this.firstNode(this.displayedId(st[st.length - 1]!.id)) };
