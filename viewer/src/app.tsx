@@ -1,5 +1,6 @@
 import { toPng } from 'html-to-image';
 import * as React from 'react';
+import { Ic } from './icons';
 import { saveSetting } from './settings';
 
 // ── API projection (viewer-local; SSOT is src/schema.ts, this is read-only) ──
@@ -740,7 +741,7 @@ export class App extends React.Component<AppProps, AppState> {
               onClick={() => this.setState((s) => ({ railOpen: { ...s.railOpen, [path]: !open } }))}
               data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
               style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
-            >{open ? '▾' : '▸'}</button>
+            >{open ? <Ic n="chevron-down" size={14} /> : <Ic n="chevron-right" size={14} />}</button>
             <button onClick={() => { this.enterPath(path.split(PATH_SEP)); this.closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
               <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
@@ -863,7 +864,7 @@ export class App extends React.Component<AppProps, AppState> {
     const cont = this.continueTarget();
     const atStart = selI <= 0;
     const atEnd = selI >= ns.length - 1;
-    const navBtn = (disabled: boolean): React.CSSProperties => ({ width: 32, height: 32, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: disabled ? 'var(--mute)' : 'var(--dim)', fontSize: 13, opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' });
+    const navBtn = (disabled: boolean): React.CSSProperties => ({ width: 32, height: 32, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: disabled ? 'var(--mute)' : 'var(--dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' });
     const selStatus = selNode?.status ?? 'planned';
     // honest rule: criteria read as verified only when the node is built (has tests)
     const chk = (_i: number) => selStatus === 'built';
@@ -879,7 +880,7 @@ export class App extends React.Component<AppProps, AppState> {
       <div style={rootStyle as React.CSSProperties}>
         <div style={{ ...css('height:52px;flex:0 0 auto;display:flex;align-items:center;border-bottom:1px solid var(--border);background:var(--surface);z-index:20;'), gap: isNarrow ? 8 : 16, padding: isNarrow ? '0 10px' : '0 16px' }}>
           {isNarrow && (
-            <button data-tip="Menu" data-tip-align="left" onClick={() => this.setState((s) => ({ drawerOpen: !s.drawerOpen }))} style={css('width:30px;height:30px;flex:0 0 auto;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:15px;display:flex;align-items:center;justify-content:center;')}>☰</button>
+            <button data-tip="Menu" data-tip-align="left" onClick={() => this.setState((s) => ({ drawerOpen: !s.drawerOpen }))} style={css('width:30px;height:30px;flex:0 0 auto;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:15px;display:flex;align-items:center;justify-content:center;')}><Ic n="menu" size={17} /></button>
           )}
           <div style={{ ...css('display:flex;align-items:center;gap:9px;'), flex: '0 0 auto' }}>
             <div style={css('width:15px;height:15px;border-radius:4px;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft);')}></div>
@@ -915,14 +916,14 @@ export class App extends React.Component<AppProps, AppState> {
               </div>
             )}
             <button data-tip={this.state.notesOpen ? 'Notes hub open — click a node to note it' : 'Notes — annotate nodes, copy as prompt'} onClick={() => this.setState((s) => ({ notesOpen: !s.notesOpen, notePopover: null }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              ✎
+              <Ic n="pencil" size={15} />
               {this.openNotes().length > 0 && (
                 <span style={css("position:absolute;top:-5px;right:-5px;min-width:14px;height:14px;border-radius:7px;background:var(--accent);color:var(--accentFg);font-size:9px;font-weight:700;line-height:14px;text-align:center;padding:0 3px;font-family:'JetBrains Mono',monospace;")}>{this.openNotes().length}</span>
               )}
             </button>
-            <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? '⇅' : '⇄'}</button>
-            <button data-tip="Export view as PNG" onClick={() => void this.exportPng()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>⤓</button>
-            <button data-tip={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? '☀' : '☾'}</button>
+            <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? <Ic n="arrows-ud" size={15} /> : <Ic n="arrows-lr" size={15} />}</button>
+            <button data-tip="Export view as PNG" onClick={() => void this.exportPng()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n="download" size={15} /></button>
+            <button data-tip={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? <Ic n="sun" size={15} /> : <Ic n="moon" size={15} />}</button>
           </div>
         </div>
 
@@ -951,7 +952,7 @@ export class App extends React.Component<AppProps, AppState> {
                       {!applied && (
                         <button onClick={() => this.applyNote(n.id)} title="Mark applied" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--built);background:transparent;color:var(--built);font-size:10.5px;font-weight:600;cursor:pointer;')}>✓ applied</button>
                       )}
-                      <button onClick={() => this.deleteNote(n.id)} data-tip="Delete note" data-tip-pos="up" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--borderStrong);background:transparent;color:var(--dim);font-size:10.5px;font-weight:600;cursor:pointer;')}>🗑</button>
+                      <button onClick={() => this.deleteNote(n.id)} data-tip="Delete note" data-tip-pos="up" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--borderStrong);background:transparent;color:var(--dim);font-size:10.5px;font-weight:600;cursor:pointer;')}><Ic n="trash" size={13} /></button>
                     </div>
                   </div>
                 );
@@ -1056,15 +1057,15 @@ export class App extends React.Component<AppProps, AppState> {
                 {hasVariants && isNarrow && !this.state.versionsOpen && (
                   <button
                     onClick={() => this.setState({ versionsOpen: true })}
-                    style={css('position:absolute;right:12px;top:12px;z-index:8;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;box-shadow:var(--shadow);')}
-                  >⑂ {journey?.variantOf ? journey.variantLabel ?? journey.id : 'Current'} ▾</button>
+                    style={css('position:absolute;right:12px;top:12px;z-index:8;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px;box-shadow:var(--shadow);')}
+                  ><Ic n="branch" size={13} /> {journey?.variantOf ? journey.variantLabel ?? journey.id : 'Current'} <Ic n="chevron-down" size={13} /></button>
                 )}
                 {hasVariants && (!isNarrow || this.state.versionsOpen) && (
                   <div style={{ ...css('position:absolute;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);overflow-y:auto;animation:slideUp 200ms ease;'), right: 14, left: isNarrow ? 12 : 'auto', maxHeight: isNarrow ? '45vh' : 'none' }}>
                     <div style={css('display:flex;align-items:center;')}>
                       <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
                       {isNarrow && (
-                        <button onClick={() => this.setState({ versionsOpen: false })} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);font-size:15px;cursor:pointer;padding:0;')}>✕</button>
+                        <button onClick={() => this.setState({ versionsOpen: false })} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;')}><Ic n="x" size={15} /></button>
                       )}
                     </div>
                     {versions.map((v) => (
@@ -1158,13 +1159,13 @@ export class App extends React.Component<AppProps, AppState> {
                         data-tip={this.state.detailOpen ? 'Hide node detail' : 'Show node detail'}
                         data-tip-pos="up"
                         onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))}
-                        style={{ ...css('border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);'), flex: '0 0 auto', marginLeft: 'auto', width: isNarrow ? 36 : 30, height: isNarrow ? 36 : 30, fontSize: isNarrow ? 16 : 14 }}
-                      >{this.state.detailOpen ? '▾' : '▴'}</button>
+                        style={{ ...css('border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);display:flex;align-items:center;justify-content:center;'), flex: '0 0 auto', marginLeft: 'auto', width: isNarrow ? 36 : 30, height: isNarrow ? 36 : 30 }}
+                      >{this.state.detailOpen ? <Ic n="chevron-down" size={isNarrow ? 19 : 16} /> : <Ic n="chevron-up" size={isNarrow ? 19 : 16} />}</button>
                     );
                     const navGroup = (
                       <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
-                        <button data-tip="Previous node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}>◂</button>
-                        <button data-tip="Next node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}>▸</button>
+                        <button data-tip="Previous node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}><Ic n="chevron-left" size={16} /></button>
+                        <button data-tip="Next node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}><Ic n="chevron-right" size={16} /></button>
                       </div>
                     );
                     const stepChip = <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>;
@@ -1178,7 +1179,7 @@ export class App extends React.Component<AppProps, AppState> {
                     );
                     return isNarrow ? (
                       // phone: controls row (chevron pinned right), then narration row — canvas keeps its space
-                      <div style={css('display:flex;flex-direction:column;gap:7px;padding:8px 12px;')}>
+                      <div style={{ ...css('display:flex;flex-direction:column;gap:10px;'), padding: '12px 12px calc(14px + env(safe-area-inset-bottom))' }}>
                         <div style={css('display:flex;align-items:center;gap:10px;')}>
                           {navGroup}{stepChip}{progress(true)}{detailToggle}
                         </div>
@@ -1197,7 +1198,7 @@ export class App extends React.Component<AppProps, AppState> {
                   })()}
 
                   {detailShown && selNode && (
-                    <div style={{ ...css('border-top:1px solid var(--border);padding:16px 18px;display:flex;flex-wrap:wrap;gap:14px 34px;overflow-y:auto;animation:panelUp 200ms ease;'), maxHeight: isNarrow ? '50vh' : 236 }}>
+                    <div style={{ ...css('border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:14px 34px;overflow-y:auto;animation:panelUp 200ms ease;'), padding: isNarrow ? '20px 16px calc(28px + env(safe-area-inset-bottom))' : '16px 18px', maxHeight: isNarrow ? '50vh' : 236 }}>
                       <div style={css('flex:0 0 auto;max-width:280px;display:flex;flex-direction:column;')}>
                         <div style={css('display:flex;align-items:center;gap:9px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;color:var(--mute);")}>{TYPE_TEXT[nodeKind(selNode)]}</span>
