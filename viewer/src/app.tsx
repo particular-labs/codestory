@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type ExportOpts } from './export';
 import { Ic } from './icons';
-import { saveSetting } from './settings';
+import { loadSettings, saveSettings } from './settings';
+import { type Loc, parseLocation, serializeLocation } from './urlState';
 
 // ── API projection (viewer-local; SSOT is src/schema.ts, this is read-only) ──
 
@@ -296,6 +297,7 @@ interface AppState {
   drawerOpen: boolean; // narrow-only: left rail overlay drawer open
   exportOpen: boolean; // export-options popover open
   exportOpts: ExportOpts; // what to bake into the PNG (all on by default)
+  linkCopied: boolean; // transient: "copy link to this view" feedback
 }
 
 const nodeKind = (n: ApiNode) => (n.journey ? 'subflow' : n.type);
@@ -313,14 +315,25 @@ const sizedNode = (n: ApiNode): SizedNode => ({ id: n.id, w: NODE_W, h: estimate
 const portsSummary = (b: ApiJourney) =>
   [b.entries.length ? `entry: ${b.entries.join(', ')}` : '', b.exits.length ? `exits: ${b.exits.join(', ')}` : ''].filter(Boolean).join(' · ');
 
+/** The shareable location embedded in app state (drives urlState serialization). */
+const locOf = (s: AppState): Loc => ({ path: s.stack.map((e) => e.id), node: s.selectedNodeId, persona: s.persona, variants: s.variantSel });
+
 export class App extends React.Component<AppProps, AppState> {
   constructor(props: AppProps) {
     super(props);
     const isNarrow = narrowMql()?.matches ?? false;
     // precedence: explicit URL/saved flow > narrow ? vertical : horizontal
     const flow = props.flowDirection ?? (isNarrow ? 'vertical' : 'horizontal');
-    this.state = { data: props.data, theme: props.defaultTheme, view: 'map', stack: [], selectedNodeId: null, persona: null, query: '', detailOpen: !isNarrow, nodePos: {}, mapPos: {}, variantSel: {}, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false, exportOpen: false, exportOpts: { ...DEFAULT_EXPORT_OPTS } };
+    // seed location from the URL so a refresh / shared link lands on the same view.
+    // caller-chain info is enriched (and ids validated) in componentDidMount.
+    const loc = parseLocation(window.location.search);
+    this._initialLoc = loc;
+    const exportOpts = { ...DEFAULT_EXPORT_OPTS, ...(loadSettings().exportOpts ?? {}) };
+    this.state = { data: props.data, theme: props.defaultTheme, view: loc.path.length ? 'journey' : 'map', stack: loc.path.map((id) => ({ id })), selectedNodeId: loc.node, persona: loc.persona, query: '', detailOpen: !isNarrow, nodePos: {}, mapPos: {}, variantSel: loc.variants, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false, exportOpen: false, exportOpts, linkCopied: false };
   }
+
+  private _initialLoc: Loc;
+  private _restoring = false; // guard: don't echo a popstate/restore back into history
 
   private _d: { byId: Map<string, ApiJourney>; order: string[]; chainEdges: EdgeTuple[]; personas: ApiPersona[]; variantsByBase: Map<string, ApiJourney[]>; subsByJourney: Map<string, string[]> } | null = null;
   private _lay: Record<string, Layout> = {};
@@ -340,8 +353,26 @@ export class App extends React.Component<AppProps, AppState> {
     } catch { /* SSE unsupported — no live reload, viewer still works */ }
     this._mql = narrowMql();
     this._mql?.addEventListener('change', this._onNarrow);
+    // enrich the URL-seeded location: validate ids + rebuild the caller chain
+    const l = this._initialLoc;
+    if (l.path.length || l.node || l.persona || Object.keys(l.variants).length) { this._restoring = true; this.restoreLocation(l); }
+    window.addEventListener('popstate', this._onPopState);
   }
-  componentWillUnmount() { this._es?.close(); this._mql?.removeEventListener('change', this._onNarrow); }
+  componentWillUnmount() { this._es?.close(); this._mql?.removeEventListener('change', this._onNarrow); window.removeEventListener('popstate', this._onPopState); }
+
+  // ── location ↔ URL sync (SSOT: state drives the URL; back/forward drives state) ──
+  private _onPopState = () => { this._restoring = true; this.restoreLocation(parseLocation(window.location.search)); };
+
+  /** Reflect location-bearing state into the URL after it changes: pushState on a
+   *  journey-path move (so back/forward walks hops), replaceState for node/persona/
+   *  variant tweaks (so history isn't flooded). Skips the echo from a restore. */
+  componentDidUpdate(_prev: AppProps, prevState: AppState) {
+    if (this._restoring) { this._restoring = false; return; }
+    const next = serializeLocation(locOf(this.state));
+    if (next === serializeLocation(locOf(prevState))) return;
+    const pathMoved = prevState.stack.map((e) => e.id).join('~') !== this.state.stack.map((e) => e.id).join('~');
+    window.history[pathMoved ? 'pushState' : 'replaceState']({}, '', next ? `?${next}` : window.location.pathname);
+  }
 
   closeDrawer = () => this.setState({ drawerOpen: false });
 
@@ -512,19 +543,42 @@ export class App extends React.Component<AppProps, AppState> {
   firstNode(id: string) { return this.d().byId.get(id)?.nodes[0]?.id ?? null; }
 
   enterJourney(id: string) { this.setState({ view: 'journey', stack: [{ id }], selectedNodeId: this.firstNode(this.displayedId(id)) }); }
-  /** Enter a nested journey with its full caller chain (rail tree click) so
-   *  breadcrumbs, Return chips, and the persona lens see the real call stack. */
-  enterPath(ids: string[]) {
+  /** Rebuild the enriched call stack (caller journey + node per hop) from a bare id
+   *  chain. `displayed` resolves a base id to its shown variant — passed in so a
+   *  restore can honour URL variants before variantSel is committed to state. */
+  buildStack(ids: string[], displayed: (id: string) => string): StackEntry[] {
     const d = this.d();
     const stack: StackEntry[] = [];
     ids.forEach((id, i) => {
       if (i === 0) { stack.push({ id }); return; }
       const parent = ids[i - 1]!;
-      const callerNode = d.byId.get(this.displayedId(parent))?.nodes.find((n) => n.journey === id)?.id;
+      const callerNode = d.byId.get(displayed(parent))?.nodes.find((n) => n.journey === id)?.id;
       stack.push({ id, callerJourney: parent, ...(callerNode ? { callerNode } : {}) });
     });
+    return stack;
+  }
+  /** Enter a nested journey with its full caller chain (rail tree click) so
+   *  breadcrumbs, Return chips, and the persona lens see the real call stack. */
+  enterPath(ids: string[]) {
+    const stack = this.buildStack(ids, (id) => this.displayedId(id));
     const last = ids[ids.length - 1]!;
     this.setState({ view: 'journey', stack, selectedNodeId: this.firstNode(this.displayedId(last)) });
+  }
+  /** Apply a decoded location (URL / back-forward), trimming ids that no longer
+   *  exist so a stale or shared link degrades gracefully instead of showing nothing. */
+  restoreLocation(loc: Loc) {
+    const d = this.d();
+    const path: string[] = [];
+    for (const id of loc.path) { if (d.byId.has(id)) path.push(id); else break; } // longest valid prefix
+    const variants: Record<string, string> = {};
+    for (const [base, sel] of Object.entries(loc.variants)) if (d.byId.has(sel)) variants[base] = sel;
+    const displayed = (id: string) => variants[id] ?? id;
+    const persona = loc.persona && d.personas.some((p) => p.id === loc.persona) ? loc.persona : null;
+    if (path.length === 0) { this.setState({ view: 'map', stack: [], selectedNodeId: null, persona, variantSel: variants }); return; }
+    const last = path[path.length - 1]!;
+    const lastNodes = d.byId.get(displayed(last))?.nodes ?? [];
+    const node = loc.node && lastNodes.some((n) => n.id === loc.node) ? loc.node : this.firstNode(displayed(last));
+    this.setState({ view: 'journey', stack: this.buildStack(path, displayed), variantSel: variants, persona, selectedNodeId: node });
   }
   stepInto(subId: string, callerNode: string) {
     const cur = this.curEntry();
@@ -540,7 +594,17 @@ export class App extends React.Component<AppProps, AppState> {
   }
   selectNode(id: string) { this.setState({ selectedNodeId: id }); }
   setPersona(id: string) { this.setState((s) => ({ persona: s.persona === id ? null : id })); }
-  toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSetting('theme', theme); return { theme }; }); }
+  toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSettings({ theme }); return { theme }; }); }
+  /** Copy a link to the exact current view (URL already encodes the location). */
+  async copyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      this.setState({ linkCopied: true });
+      window.setTimeout(() => this.setState({ linkCopied: false }), 1400);
+    } catch {
+      this.setState({ promptText: window.location.href }); // clipboard blocked → manual-copy overlay
+    }
+  }
 
   private canvasEl = React.createRef<HTMLDivElement>();
   /** Export the visible canvas (chain map or current journey) as a framed 2x PNG:
@@ -569,7 +633,7 @@ export class App extends React.Component<AppProps, AppState> {
     a.click();
     this.setState({ exportOpen: false });
   }
-  toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSetting('flow', flow); return { flow }; }); }
+  toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSettings({ flow }); return { flow }; }); }
 
   step(dir: number) {
     const ns = this.nodes();
@@ -925,6 +989,7 @@ export class App extends React.Component<AppProps, AppState> {
               )}
             </button>
             <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? <Ic n="arrows-ud" size={15} /> : <Ic n="arrows-lr" size={15} />}</button>
+            <button data-tip={this.state.linkCopied ? 'Link copied' : 'Copy link to this view'} onClick={() => void this.copyLink()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n={this.state.linkCopied ? 'check' : 'link'} size={15} /></button>
             <button data-tip="Export view as PNG" onClick={() => this.setState((s) => ({ exportOpen: !s.exportOpen, notesOpen: false }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.exportOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.exportOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.exportOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic n="download" size={15} /></button>
             <button data-tip={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? <Ic n="sun" size={15} /> : <Ic n="moon" size={15} />}</button>
           </div>
@@ -982,7 +1047,7 @@ export class App extends React.Component<AppProps, AppState> {
               {EXPORT_TOGGLES.map(({ key, label }) => {
                 const on = this.state.exportOpts[key];
                 return (
-                  <button key={key} onClick={() => this.setState((s) => ({ exportOpts: { ...s.exportOpts, [key]: !s.exportOpts[key] } }))} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
+                  <button key={key} onClick={() => this.setState((s) => { const exportOpts = { ...s.exportOpts, [key]: !s.exportOpts[key] }; saveSettings({ exportOpts }); return { exportOpts }; })} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
                     <span style={{ flex: '0 0 auto', width: 16, height: 16, borderRadius: 5, border: `1px solid ${on ? 'var(--accent)' : 'var(--borderStrong)'}`, background: on ? 'var(--accent)' : 'transparent', color: 'var(--accentFg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <Ic n="check" size={11} />}</span>
                     <span style={css('font-size:12.5px;')}>{label}</span>
                   </button>

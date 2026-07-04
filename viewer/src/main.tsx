@@ -1,19 +1,18 @@
 import { createRoot } from 'react-dom/client';
 import { App, type ApiData } from './app';
-import { loadSetting, loadSettingOrNull } from './settings';
+import { loadSettings, resolvePref } from './settings';
 
 const root = createRoot(document.getElementById('root')!);
 
-// theme + flow are persisted settings; a URL param (?theme=light&flow=vertical)
-// overrides for the visit without overwriting the saved preference.
-// flow is resolved to its explicit source or null — the App picks the default
-// (narrow viewport → vertical) only when the user hasn't chosen, so precedence is
-// URL param > saved setting > narrow ? vertical : horizontal.
+// theme + flow are persisted preferences; a URL param (?theme=light&flow=vertical)
+// overrides for the visit without overwriting the saved value. flow resolves to
+// null when unchosen so the App can pick its context default (narrow → vertical).
 const P = new URLSearchParams(location.search);
+const s = loadSettings();
 const props = {
-  defaultTheme: loadSetting('theme', P.get('theme'), ['dark', 'light'], 'dark') as 'dark' | 'light',
+  defaultTheme: resolvePref(P.get('theme'), s.theme, ['dark', 'light'] as const, 'dark')!,
   accent: P.get('accent') ?? '',
-  flowDirection: loadSettingOrNull('flow', P.get('flow'), ['horizontal', 'vertical']) as 'horizontal' | 'vertical' | null,
+  flowDirection: resolvePref(P.get('flow'), s.flow, ['horizontal', 'vertical'] as const, null),
 };
 
 fetch('/api/journeys')
