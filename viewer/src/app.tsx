@@ -342,7 +342,7 @@ export function App(props: AppProps) {
   const restoringRef = React.useRef(false);
 
   const canvasEl = React.useRef<HTMLDivElement>(null);
-  const startDrag = useCardDrag(store, d);
+  const startDrag = useCardDrag(store);
 
   /** Reflect location-bearing state into the URL after it changes: pushState on a
    *  journey-path move (so back/forward walks hops), replaceState for step/persona/

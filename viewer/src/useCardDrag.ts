@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { Graph } from './graph';
+import { deriveGraph } from './graph';
 import type { AppStoreApi } from './store';
 
 // ── card drag (click vs drag disambiguated by a 3px threshold) ──
@@ -10,10 +10,12 @@ import type { AppStoreApi } from './store';
 // Holds NO React state (closure locals + the store), identical to the old class
 // `startDrag`. `store.getState()` is read FRESH inside move/up so a drag decided
 // long after pointerdown sees current state — notesOpen and the displayed journey
-// at pointerup-time, never a stale render closure.
+// at pointerup-time, never a stale render closure. The journey is re-derived from
+// the store's CURRENT data (not a render-time `d`) so a mid-gesture SSE refetch is
+// honoured, matching the old class's `this.curJourney()` reading live.
 
 /** Returns a stable `startDrag(kind, id, key, baseX, baseY, e)`. */
-export function useCardDrag(store: AppStoreApi, d: Graph) {
+export function useCardDrag(store: AppStoreApi) {
   return React.useCallback(
     (kind: 'map' | 'step', id: string, key: string, baseX: number, baseY: number, e: React.PointerEvent) => {
       if (e.button !== 0) return; // primary button / primary touch only
@@ -43,16 +45,17 @@ export function useCardDrag(store: AppStoreApi, d: Graph) {
         if (kind === 'map') { store.getState().enterJourney(id); return; }
         store.getState().selectNode(id);
         // notes hub open = annotate mode: a click also opens the note editor for this step.
-        // read FRESH state (post-selectNode) and re-derive the displayed journey from `d`.
+        // read FRESH state (post-selectNode) and re-derive the displayed journey from the
+        // store's current data — a mid-gesture SSE refetch must not annotate a stale journey.
         const s = store.getState();
         const entry = s.stack[s.stack.length - 1];
-        const journey = entry ? d.byId.get(s.variantSel[entry.id] ?? entry.id) ?? null : null;
+        const journey = entry ? deriveGraph(s.data).byId.get(s.variantSel[entry.id] ?? entry.id) ?? null : null;
         if (s.notesOpen && journey) s.openNotePopover(journey.id, id);
       };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
       window.addEventListener('pointercancel', up);
     },
-    [store, d],
+    [store],
   );
 }
