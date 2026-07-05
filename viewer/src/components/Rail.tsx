@@ -32,6 +32,31 @@ interface RailRowCtx {
   countBadge: React.CSSProperties;
 }
 
+// a journey node, post null-guard — what the two row halves render from
+type RailNode = NonNullable<ReturnType<Graph['byId']['get']>>;
+
+// left half: the expand/collapse chevron (hidden, but space-holding, when childless)
+function railChevron(subs: string[], open: boolean, onToggle: () => void): React.ReactNode {
+  return (
+    <button
+      onClick={onToggle}
+      data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
+      style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
+    >{open ? <Ic n="chevron-down" size={14} /> : <Ic n="chevron-right" size={14} />}</button>
+  );
+}
+
+// right half: the clickable label — status dot, title, and count/step badge
+function railLabel(b: RailNode, active: boolean, inJ: boolean, badge: string, badgeStyle: React.CSSProperties, onEnter: () => void): React.ReactNode {
+  return (
+    <button onClick={onEnter} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
+      <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
+      <span style={badgeStyle}>{badge}</span>
+    </button>
+  );
+}
+
 // one rail row + its sub-flow children, recursively; `visited` holds the
 // ancestor chain so a cyclic sub-flow reference can never recurse forever
 function railRow(ctx: RailRowCtx, id: string, path: string, inJ: boolean, badge: string, badgeStyle: React.CSSProperties, visited: Set<string>): React.ReactNode {
@@ -43,16 +68,8 @@ function railRow(ctx: RailRowCtx, id: string, path: string, inJ: boolean, badge:
   return (
     <div key={path} style={css('display:flex;flex-direction:column;gap:2px;')}>
       <div style={css('display:flex;align-items:center;gap:0;')}>
-        <button
-          onClick={() => ctx.toggleRail(path)}
-          data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
-          style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
-        >{open ? <Ic n="chevron-down" size={14} /> : <Ic n="chevron-right" size={14} />}</button>
-        <button onClick={() => { ctx.enterPath(path.split(ctx.pathSep)); ctx.closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
-          <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
-          <span style={badgeStyle}>{badge}</span>
-        </button>
+        {railChevron(subs, open, () => ctx.toggleRail(path))}
+        {railLabel(b, active, inJ, badge, badgeStyle, () => { ctx.enterPath(path.split(ctx.pathSep)); ctx.closeDrawer(); })}
       </div>
       {open && subs.length > 0 && (
         <div style={css('margin-left:11px;padding-left:8px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
