@@ -1,0 +1,3 @@
+[test]
+# Register happy-dom + browser-API stubs before any test imports react-dom.
+preload = ["./happydom.ts"]

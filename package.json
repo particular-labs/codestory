@@ -25,7 +25,9 @@
   },
   "files": ["dist", "viewer/dist", "assets/skill"],
   "scripts": {
-    "test": "bun test",
+    "test": "bun test tests && cd viewer && bun test src",
+    "test:node": "bun test tests",
+    "test:viewer": "cd viewer && bun test src",
     "build": "bun build src/cli.ts --outdir dist --target node",
     "typecheck": "tsc --noEmit",
     "build:viewer": "cd viewer && bun install && bun run build",
