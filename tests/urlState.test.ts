@@ -9,10 +9,10 @@ describe('urlState codec', () => {
     expect(parseLocation('')).toEqual(EMPTY_LOC);
   });
 
-  test('round-trips a nested path with node, persona, variants', () => {
+  test('round-trips a drill-down with step, persona, variants', () => {
     const loc: Loc = {
-      path: ['intake', 'matching'],
-      node: 'requested',
+      journeys: ['intake', 'matching'],
+      step: 'requested',
       persona: 'customer',
       variants: { intake: 'intake@v2' },
     };
@@ -20,12 +20,12 @@ describe('urlState codec', () => {
   });
 
   test('serializes with descriptive keys', () => {
-    expect(serializeLocation({ path: ['a', 'b'], node: 'n1', persona: null, variants: {} }))
-      .toBe('path=a~b&node=n1');
+    expect(serializeLocation({ journeys: ['a', 'b'], step: 's1', persona: null, variants: {} }))
+      .toBe('journeys=a~b&step=s1');
   });
 
   test('map view with only a persona lens', () => {
-    const loc: Loc = { path: [], node: null, persona: 'ops', variants: {} };
+    const loc: Loc = { journeys: [], step: null, persona: 'ops', variants: {} };
     expect(serializeLocation(loc)).toBe('persona=ops');
     expect(roundtrip(loc)).toEqual(loc);
   });
@@ -36,23 +36,23 @@ describe('urlState codec', () => {
   });
 
   test('tolerates a leading ? and unknown params', () => {
-    expect(parseLocation('?path=x&junk=1').path).toEqual(['x']);
+    expect(parseLocation('?journeys=x&junk=1').journeys).toEqual(['x']);
   });
 });
 
 describe('relevantLoc (stale-param pruning)', () => {
-  test('drops a node when there is no path (map view)', () => {
-    expect(relevantLoc({ path: [], node: 'stale', persona: 'ops', variants: {} }))
-      .toEqual({ path: [], node: null, persona: 'ops', variants: {} });
+  test('drops a step when there is no journey (map view)', () => {
+    expect(relevantLoc({ journeys: [], step: 'stale', persona: 'ops', variants: {} }))
+      .toEqual({ journeys: [], step: null, persona: 'ops', variants: {} });
   });
 
-  test('drops variants whose base is no longer in the path', () => {
-    const loc: Loc = { path: ['b'], node: 'x', persona: null, variants: { a: 'a@v2', b: 'b@v2' } };
+  test('drops variants whose base is no longer in the drill-down', () => {
+    const loc: Loc = { journeys: ['b'], step: 'x', persona: null, variants: { a: 'a@v2', b: 'b@v2' } };
     expect(relevantLoc(loc).variants).toEqual({ b: 'b@v2' });
   });
 
   test('keeps everything relevant to the current journey', () => {
-    const loc: Loc = { path: ['a', 'b'], node: 'x', persona: 'ops', variants: { a: 'a@v2' } };
+    const loc: Loc = { journeys: ['a', 'b'], step: 'x', persona: 'ops', variants: { a: 'a@v2' } };
     expect(relevantLoc(loc)).toEqual(loc);
   });
 });

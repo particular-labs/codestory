@@ -23,12 +23,12 @@ export interface ExportMeta {
   legend: string;
 }
 
-/** Node counts → the legend line shown under an export. */
-export function summarize(nodes: Array<{ type: string; status?: string; journey?: string }>): string {
-  const total = nodes.length;
-  const built = nodes.filter((n) => n.status === 'built').length;
-  const exits = nodes.filter((n) => n.type === 'exit').length;
-  const subs = nodes.filter((n) => n.journey).length;
+/** Step counts → the legend line shown under an export. */
+export function summarize(steps: Array<{ type: string; status?: string; journey?: string }>): string {
+  const total = steps.length;
+  const built = steps.filter((n) => n.status === 'built').length;
+  const exits = steps.filter((n) => n.type === 'exit').length;
+  const subs = steps.filter((n) => n.journey).length;
   const parts = [`${total} step${total === 1 ? '' : 's'}`, `${built} built`, `${exits} exit${exits === 1 ? '' : 's'}`];
   if (subs) parts.push(`${subs} sub-flow${subs === 1 ? '' : 's'}`);
   return parts.join(' · ');

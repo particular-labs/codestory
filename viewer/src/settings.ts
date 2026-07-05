@@ -1,5 +1,5 @@
 // SSOT for persisted viewer *preferences* — the durable, follows-you-everywhere
-// choices (theme, flow direction, export defaults). Location (which journey/node
+// choices (theme, flow direction, export defaults). Location (which journey/step
 // you're looking at) is not a preference; it lives in the URL — see urlState.ts.
 //
 // Stored as one JSON object under `codestory:settings`. Precedence for a given

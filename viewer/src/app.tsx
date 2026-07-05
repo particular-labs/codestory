@@ -9,9 +9,9 @@ import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlSt
 
 export type Status = 'planned' | 'built' | 'drifted';
 
-export interface ApiNode {
+export interface ApiStep {
   id: string;
-  type: 'step' | 'decision' | 'exit';
+  type: 'action' | 'decision' | 'exit';
   label?: string;
   note?: string;
   refs?: string[];
@@ -32,7 +32,7 @@ export interface ApiJourney {
   variantLabel?: string;
   entries: string[];
   exits: string[];
-  nodes: ApiNode[];
+  steps: ApiStep[];
   edges: Array<{ from: string; to: string; label?: string; when?: string }>;
   links: Array<{ exit: string; journey: string; entry: string }>;
 }
@@ -48,7 +48,7 @@ export interface ApiPersona {
 export interface ApiNote {
   id: string;
   journey: string;
-  node?: string;
+  step?: string;
   text: string;
   status: 'open' | 'applied';
   createdAt: string;
@@ -101,61 +101,61 @@ function statusPill(s: Status): React.CSSProperties {
   return { color: `var(${m.varName})`, border: `1px solid var(${m.varName})`, background: 'transparent', borderRadius: 5, padding: '2px 7px', fontSize: 9.5, fontWeight: 600, fontFamily: mono, letterSpacing: '0.02em' };
 }
 
-// ── layered DAG auto-layout (from the design export, generalized for cards vs nodes) ──
+// ── layered DAG auto-layout (from the design export, generalized for cards vs boxes) ──
 // Size-aware Sugiyama subset: longest-path ranking → barycenter ordering sweeps
-// (crossing reduction) → cumulative per-rank packing using each node's real
-// estimated size, so tall nodes never overlap. Gaps are CLEARANCE between boxes.
+// (crossing reduction) → cumulative per-rank packing using each box's real
+// estimated size, so tall boxes never overlap. Gaps are CLEARANCE between boxes.
 
 interface LayoutGaps { main: number; cross: number }
-interface SizedNode { id: string; w: number; h: number }
+interface SizedBox { id: string; w: number; h: number }
 interface Layout { pos: Record<string, { x: number; y: number }>; w: number; h: number }
 
-function computeLayout(nodes: SizedNode[], edges: Array<[string, string]>, vertical: boolean, g: LayoutGaps): Layout {
+function computeLayout(boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, g: LayoutGaps): Layout {
   const PADX = 32, PADY = 28;
-  if (!nodes.length) return { pos: {}, w: PADX * 2, h: PADY * 2 };
-  const ids = new Set(nodes.map((n) => n.id));
+  if (!boxes.length) return { pos: {}, w: PADX * 2, h: PADY * 2 };
+  const ids = new Set(boxes.map((n) => n.id));
   const size: Record<string, { w: number; h: number }> = {};
   const authored: Record<string, number> = {};
-  nodes.forEach((n, i) => { size[n.id] = { w: n.w, h: n.h }; authored[n.id] = i; });
+  boxes.forEach((n, i) => { size[n.id] = { w: n.w, h: n.h }; authored[n.id] = i; });
   const raw: Record<string, string[]> = {};
-  nodes.forEach((n) => { raw[n.id] = []; });
+  boxes.forEach((n) => { raw[n.id] = []; });
   edges.forEach(([a, b]) => { if (ids.has(a) && ids.has(b) && a !== b) raw[a]!.push(b); });
 
   // 1. detect back-edges (cycle closers) via DFS coloring so ranks stay monotonic
   const color: Record<string, number> = {};
-  nodes.forEach((n) => { color[n.id] = 0; });
+  boxes.forEach((n) => { color[n.id] = 0; });
   const back: Record<string, boolean> = {};
   const dfs = (u: string) => {
     color[u] = 1;
     raw[u]!.forEach((v) => { if (color[v] === 1) back[u + '>' + v] = true; else if (color[v] === 0) dfs(v); });
     color[u] = 2;
   };
-  nodes.forEach((n) => { if (color[n.id] === 0) dfs(n.id); });
+  boxes.forEach((n) => { if (color[n.id] === 0) dfs(n.id); });
 
   // 2. longest-path ranking over forward edges (Kahn relaxation)
   const adj: Record<string, string[]> = {};
   const pred: Record<string, string[]> = {};
   const indeg: Record<string, number> = {};
-  nodes.forEach((n) => { adj[n.id] = []; pred[n.id] = []; indeg[n.id] = 0; });
+  boxes.forEach((n) => { adj[n.id] = []; pred[n.id] = []; indeg[n.id] = 0; });
   edges.forEach(([a, b]) => {
     if (!ids.has(a) || !ids.has(b) || a === b || back[a + '>' + b]) return;
     adj[a]!.push(b); pred[b]!.push(a); indeg[b]!++;
   });
   const rank: Record<string, number> = {};
-  nodes.forEach((n) => { rank[n.id] = 0; });
-  const q = nodes.filter((n) => indeg[n.id] === 0).map((n) => n.id);
+  boxes.forEach((n) => { rank[n.id] = 0; });
+  const q = boxes.filter((n) => indeg[n.id] === 0).map((n) => n.id);
   while (q.length) {
     const u = q.shift()!;
     adj[u]!.forEach((v) => { if (rank[u]! + 1 > rank[v]!) rank[v] = rank[u]! + 1; if (--indeg[v]! === 0) q.push(v); });
   }
 
-  // 3. bucket nodes by rank, preserving authored order → initial lane order
+  // 3. bucket boxes by rank, preserving authored order → initial lane order
   const cols: Record<number, string[]> = {};
   let maxRank = 0;
-  nodes.forEach((n) => { const r = rank[n.id]!; (cols[r] = cols[r] ?? []).push(n.id); if (r > maxRank) maxRank = r; });
+  boxes.forEach((n) => { const r = rank[n.id]!; (cols[r] = cols[r] ?? []).push(n.id); if (r > maxRank) maxRank = r; });
 
   // 3b. crossing reduction: barycenter ordering sweeps (down, up, down).
-  // A node's key is the mean centered lane index of its neighbors in the
+  // A box's key is the mean centered lane index of its neighbors in the
   // sweep direction; stable sort + authored tie-break keeps it deterministic.
   const laneIdx: Record<string, number> = {};
   const reindex = (r: number) => (cols[r] ?? []).forEach((id, i) => { laneIdx[id] = i; });
@@ -261,7 +261,7 @@ const THEMES = {
 
 // ── viewer constants ──
 
-const NODE_W = 176, NODE_H = 64;
+const STEP_W = 176, STEP_H = 64;
 const CARD_W = 224, CARD_H = 120;
 // phone breakpoint — SSOT for every narrow-viewport layout switch (drawer rail,
 // compact header, vertical-by-default canvas, bottom-sheet detail, ≥16px inputs)
@@ -279,17 +279,17 @@ interface AppState {
   theme: 'dark' | 'light';
   view: 'map' | 'journey';
   stack: StackEntry[];
-  selectedNodeId: string | null;
+  selectedStepId: string | null;
   persona: string | null;
   query: string;
   detailOpen: boolean;
-  nodePos: Record<string, { x: number; y: number }>;
+  stepPos: Record<string, { x: number; y: number }>;
   mapPos: Record<string, { x: number; y: number }>;
   variantSel: Record<string, string>; // base journey id → selected version's journey id
   flow: 'horizontal' | 'vertical'; // SSOT for flow direction — every layout/edge/port reads this
-  notesOpen: boolean; // notes hub popover open — doubles as annotate mode (click a node to leave a change-note)
+  notesOpen: boolean; // notes hub popover open — doubles as annotate mode (click a step to leave a change-note)
   railOpen: Record<string, boolean>; // rail sub-flow tree: path → expanded (collapsed by default)
-  notePopover: { journey: string; node: string } | null; // open note editor
+  notePopover: { journey: string; step: string } | null; // open note editor
   noteDraft: string;
   promptText: string | null; // clipboard fallback overlay
   copied: boolean;
@@ -301,24 +301,24 @@ interface AppState {
   linkCopied: boolean; // transient: "copy link to this view" feedback
 }
 
-const nodeKind = (n: ApiNode) => (n.journey ? 'subflow' : n.type);
-const nodeTitle = (n: ApiNode) => n.label ?? n.port ?? n.id;
-/** Estimated rendered height of a journey node card (pure; mirrors the card CSS:
- *  minHeight 64, ~22 chars/wrapped title line at NODE_W, +28px Step-into button).
- *  Ghosts render no button, but a node may be active in another variant, so we
- *  size sub-flow nodes for the button either way — layout stays stable across
+const stepKind = (n: ApiStep) => (n.journey ? 'subflow' : n.type);
+const stepTitle = (n: ApiStep) => n.label ?? n.port ?? n.id;
+/** Estimated rendered height of a journey step card (pure; mirrors the card CSS:
+ *  minHeight 64, ~22 chars/wrapped title line at STEP_W, +28px Step-into button).
+ *  Ghosts render no button, but a step may be active in another variant, so we
+ *  size sub-flow steps for the button either way — layout stays stable across
  *  variant switches and ghosts just get extra slack. */
-const estimateNodeH = (n: ApiNode) => {
-  const lines = Math.max(1, Math.ceil(nodeTitle(n).length / 22));
-  return NODE_H + (lines - 1) * 17 + (nodeKind(n) === 'subflow' ? 28 : 0);
+const estimateStepH = (n: ApiStep) => {
+  const lines = Math.max(1, Math.ceil(stepTitle(n).length / 22));
+  return STEP_H + (lines - 1) * 17 + (stepKind(n) === 'subflow' ? 28 : 0);
 };
-const sizedNode = (n: ApiNode): SizedNode => ({ id: n.id, w: NODE_W, h: estimateNodeH(n) });
+const sizedStep = (n: ApiStep): SizedBox => ({ id: n.id, w: STEP_W, h: estimateStepH(n) });
 const portsSummary = (b: ApiJourney) =>
   [b.entries.length ? `entry: ${b.entries.join(', ')}` : '', b.exits.length ? `exits: ${b.exits.join(', ')}` : ''].filter(Boolean).join(' · ');
 
 /** The shareable location embedded in app state (drives urlState serialization).
  *  relevantLoc drops params that don't apply to the current view so nothing sticks. */
-const locOf = (s: AppState): Loc => relevantLoc({ path: s.stack.map((e) => e.id), node: s.selectedNodeId, persona: s.persona, variants: s.variantSel });
+const locOf = (s: AppState): Loc => relevantLoc({ journeys: s.stack.map((e) => e.id), step: s.selectedStepId, persona: s.persona, variants: s.variantSel });
 
 
 export class App extends React.Component<AppProps, AppState> {
@@ -332,7 +332,7 @@ export class App extends React.Component<AppProps, AppState> {
     const loc = parseLocation(window.location.search);
     this._initialLoc = loc;
     const exportOpts = { ...DEFAULT_EXPORT_OPTS, ...(loadSettings().exportOpts ?? {}) };
-    this.state = { data: props.data, theme: props.defaultTheme, view: loc.path.length ? 'journey' : 'map', stack: loc.path.map((id) => ({ id })), selectedNodeId: loc.node, persona: loc.persona, query: '', detailOpen: !isNarrow, nodePos: {}, mapPos: {}, variantSel: loc.variants, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false, exportOpen: false, exportOpts, linkCopied: false };
+    this.state = { data: props.data, theme: props.defaultTheme, view: loc.journeys.length ? 'journey' : 'map', stack: loc.journeys.map((id) => ({ id })), selectedStepId: loc.step, persona: loc.persona, query: '', detailOpen: !isNarrow, stepPos: {}, mapPos: {}, variantSel: loc.variants, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false, exportOpen: false, exportOpts, linkCopied: false };
   }
 
   private _initialLoc: Loc;
@@ -358,7 +358,7 @@ export class App extends React.Component<AppProps, AppState> {
     this._mql?.addEventListener('change', this._onNarrow);
     // enrich the URL-seeded location: validate ids + rebuild the caller chain
     const l = this._initialLoc;
-    if (l.path.length || l.node || l.persona || Object.keys(l.variants).length) { this._restoring = true; this.restoreLocation(l); }
+    if (l.journeys.length || l.step || l.persona || Object.keys(l.variants).length) { this._restoring = true; this.restoreLocation(l); }
     window.addEventListener('popstate', this._onPopState);
   }
   componentWillUnmount() { this._es?.close(); this._mql?.removeEventListener('change', this._onNarrow); window.removeEventListener('popstate', this._onPopState); }
@@ -367,7 +367,7 @@ export class App extends React.Component<AppProps, AppState> {
   private _onPopState = () => { this._restoring = true; this.restoreLocation(parseLocation(window.location.search)); };
 
   /** Reflect location-bearing state into the URL after it changes: pushState on a
-   *  journey-path move (so back/forward walks hops), replaceState for node/persona/
+   *  journey-path move (so back/forward walks hops), replaceState for step/persona/
    *  variant tweaks (so history isn't flooded). Skips the echo from a restore. */
   componentDidUpdate(_prev: AppProps, prevState: AppState) {
     if (this._restoring) { this._restoring = false; return; }
@@ -389,14 +389,14 @@ export class App extends React.Component<AppProps, AppState> {
       this.setState((s) => {
         const byId = new Map(data.journeys.map((b) => [b.id, b]));
         const stack = s.stack.filter((e) => byId.has(e.id));
-        let selectedNodeId = s.selectedNodeId;
+        let selectedStepId = s.selectedStepId;
         const top = stack[stack.length - 1];
         if (top) {
           const selVar = s.variantSel[top.id];
           const journey = byId.get(selVar && byId.has(selVar) ? selVar : top.id);
-          if (!journey?.nodes.some((n) => n.id === selectedNodeId)) selectedNodeId = journey?.nodes[0]?.id ?? null;
+          if (!journey?.steps.some((n) => n.id === selectedStepId)) selectedStepId = journey?.steps[0]?.id ?? null;
         }
-        return { data, stack, selectedNodeId, view: stack.length ? s.view : 'map' };
+        return { data, stack, selectedStepId, view: stack.length ? s.view : 'map' };
       });
     } catch { /* network blip — keep showing current data */ }
   }
@@ -404,7 +404,7 @@ export class App extends React.Component<AppProps, AppState> {
   // ── notes (annotations) ──
   allNotes() { return this.state.data.notes ?? []; }
   openNotes() { return this.allNotes().filter((n) => n.status === 'open'); }
-  openNotesFor(journey: string, node: string) { return this.allNotes().filter((n) => n.journey === journey && n.node === node && n.status === 'open'); }
+  openNotesFor(journey: string, step: string) { return this.allNotes().filter((n) => n.journey === journey && n.step === step && n.status === 'open'); }
 
   async postNote(body: Record<string, unknown>): Promise<boolean> {
     try {
@@ -413,40 +413,40 @@ export class App extends React.Component<AppProps, AppState> {
       return res.ok;
     } catch { return false; }
   }
-  async saveNote(journey: string, node: string, text: string) {
+  async saveNote(journey: string, step: string, text: string) {
     if (!text.trim()) return;
-    const ok = await this.postNote({ journey, node, text: text.trim() });
+    const ok = await this.postNote({ journey, step, text: text.trim() });
     if (ok) this.setState({ notePopover: null, noteDraft: '' });
   }
   applyNote(id: string) { void this.postNote({ id, status: 'applied' }); }
   deleteNote(id: string) { void this.postNote({ id, delete: true }); }
   clearNotes() { void this.postNote({ clear: true }); }
-  goToNote(n: { journey: string; node?: string }) {
+  goToNote(n: { journey: string; step?: string }) {
     this.enterJourney(n.journey);
-    if (n.node) this.setState({ selectedNodeId: n.node });
+    if (n.step) this.setState({ selectedStepId: n.step });
   }
 
-  /** Serialize every open note + its node context into an LLM-ready markdown block. */
+  /** Serialize every open note + its step context into an LLM-ready markdown block. */
   buildPrompt(): string {
     const d = this.d();
     const out: string[] = [
       '# Codestory annotations — apply these changes',
       '',
-      'Each note below requests a change against a node in the codestory journeys under `.codestory/`. For each note, edit the referenced journey JSON and/or the code it points to, then mark the note applied.',
+      'Each note below requests a change against a step in the codestory journeys under `.codestory/`. For each note, edit the referenced journey JSON and/or the code it points to, then mark the note applied.',
       '',
     ];
     this.openNotes().forEach((note, i) => {
       const journey = d.byId.get(note.journey);
-      const node = note.node ? journey?.nodes.find((n) => n.id === note.node) : undefined;
+      const step = note.step ? journey?.steps.find((n) => n.id === note.step) : undefined;
       out.push(`## Note ${i + 1}`);
       out.push(`- journey: \`${note.journey}\`${journey ? ` (${journey.title})` : ''}`);
-      if (node) {
-        out.push(`- node: \`${node.id}\` — ${nodeTitle(node)}`);
-        if (node.refs?.length) out.push(`- refs: ${node.refs.join(', ')}`);
-        if (node.contract) out.push(`- contract: in ${node.contract.in ?? '—'} → out ${node.contract.out ?? '—'}`);
-        if (node.acceptance?.length) { out.push('- acceptance:'); node.acceptance.forEach((a) => out.push(`  - ${a}`)); }
-      } else if (note.node) {
-        out.push(`- node: \`${note.node}\``);
+      if (step) {
+        out.push(`- step: \`${step.id}\` — ${stepTitle(step)}`);
+        if (step.refs?.length) out.push(`- refs: ${step.refs.join(', ')}`);
+        if (step.contract) out.push(`- contract: in ${step.contract.in ?? '—'} → out ${step.contract.out ?? '—'}`);
+        if (step.acceptance?.length) { out.push('- acceptance:'); step.acceptance.forEach((a) => out.push(`  - ${a}`)); }
+      } else if (note.step) {
+        out.push(`- step: \`${note.step}\``);
       }
       out.push(`- change requested: ${note.text}`);
       out.push('');
@@ -474,12 +474,12 @@ export class App extends React.Component<AppProps, AppState> {
     });
     // the base-journey graph defines the tree; variants' extra sub refs don't hide journeys
     const bases = journeys.filter((b) => !b.variantOf);
-    const subIds = new Set(bases.flatMap((b) => b.nodes.map((n) => n.journey)).filter(Boolean) as string[]);
+    const subIds = new Set(bases.flatMap((b) => b.steps.map((n) => n.journey)).filter(Boolean) as string[]);
     let order = bases.filter((b) => !subIds.has(b.id)).map((b) => b.id);
-    // journey id → its direct sub-flow journey ids (node.journey refs), in node order
+    // journey id → its direct sub-flow journey ids (step.journey refs), in step order
     const subsByJourney = new Map<string, string[]>();
     bases.forEach((b) => {
-      const subs = b.nodes.flatMap((n) => (n.journey ? [n.journey] : [])).filter((s, i, a) => a.indexOf(s) === i);
+      const subs = b.steps.flatMap((n) => (n.journey ? [n.journey] : [])).filter((s, i, a) => a.indexOf(s) === i);
       if (subs.length) subsByJourney.set(b.id, subs);
     });
     // cycle rescue: a mutually-referencing component has no unreferenced root —
@@ -519,9 +519,9 @@ export class App extends React.Component<AppProps, AppState> {
     return this._d;
   }
 
-  layout(key: string, nodes: SizedNode[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout {
+  layout(key: string, boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout {
     const k = `${key}:${vertical ? 'v' : 'h'}`;
-    this._lay[k] = this._lay[k] ?? computeLayout(nodes, edges, vertical, gaps);
+    this._lay[k] = this._lay[k] ?? computeLayout(boxes, edges, vertical, gaps);
     return this._lay[k]!;
   }
 
@@ -537,16 +537,16 @@ export class App extends React.Component<AppProps, AppState> {
   }
   setVariant(baseId: string, journeyId: string) {
     // versionsOpen: on phones the picker collapses back to its pill after a choice
-    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: journeyId }, selectedNodeId: this.firstNode(journeyId), versionsOpen: false }));
+    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: journeyId }, selectedStepId: this.firstStep(journeyId), versionsOpen: false }));
   }
   /** The journey id actually displayed for a base id (its selected variant, else itself). */
   displayedId(baseId: string) { return this.state.variantSel[baseId] ?? baseId; }
-  nodes() { return this.curJourney()?.nodes ?? []; }
-  selIndex() { return this.nodes().findIndex((n) => n.id === this.state.selectedNodeId); }
-  firstNode(id: string) { return this.d().byId.get(id)?.nodes[0]?.id ?? null; }
+  steps() { return this.curJourney()?.steps ?? []; }
+  selIndex() { return this.steps().findIndex((n) => n.id === this.state.selectedStepId); }
+  firstStep(id: string) { return this.d().byId.get(id)?.steps[0]?.id ?? null; }
 
-  enterJourney(id: string) { this.setState({ view: 'journey', stack: [{ id }], selectedNodeId: this.firstNode(this.displayedId(id)) }); }
-  /** Rebuild the enriched call stack (caller journey + node per hop) from a bare id
+  enterJourney(id: string) { this.setState({ view: 'journey', stack: [{ id }], selectedStepId: this.firstStep(this.displayedId(id)) }); }
+  /** Rebuild the enriched call stack (caller journey + step per hop) from a bare id
    *  chain. `displayed` resolves a base id to its shown variant — passed in so a
    *  restore can honour URL variants before variantSel is committed to state. */
   buildStack(ids: string[], displayed: (id: string) => string): StackEntry[] {
@@ -555,7 +555,7 @@ export class App extends React.Component<AppProps, AppState> {
     ids.forEach((id, i) => {
       if (i === 0) { stack.push({ id }); return; }
       const parent = ids[i - 1]!;
-      const callerNode = d.byId.get(displayed(parent))?.nodes.find((n) => n.journey === id)?.id;
+      const callerNode = d.byId.get(displayed(parent))?.steps.find((n) => n.journey === id)?.id;
       stack.push({ id, callerJourney: parent, ...(callerNode ? { callerNode } : {}) });
     });
     return stack;
@@ -565,37 +565,37 @@ export class App extends React.Component<AppProps, AppState> {
   enterPath(ids: string[]) {
     const stack = this.buildStack(ids, (id) => this.displayedId(id));
     const last = ids[ids.length - 1]!;
-    this.setState({ view: 'journey', stack, selectedNodeId: this.firstNode(this.displayedId(last)) });
+    this.setState({ view: 'journey', stack, selectedStepId: this.firstStep(this.displayedId(last)) });
   }
   /** Apply a decoded location (URL / back-forward), trimming ids that no longer
    *  exist so a stale or shared link degrades gracefully instead of showing nothing. */
   restoreLocation(loc: Loc) {
     const d = this.d();
     const path: string[] = [];
-    for (const id of loc.path) { if (d.byId.has(id)) path.push(id); else break; } // longest valid prefix
+    for (const id of loc.journeys) { if (d.byId.has(id)) path.push(id); else break; } // longest valid prefix
     const variants: Record<string, string> = {};
     for (const [base, sel] of Object.entries(loc.variants)) if (d.byId.has(sel)) variants[base] = sel;
     const displayed = (id: string) => variants[id] ?? id;
     const persona = loc.persona && d.personas.some((p) => p.id === loc.persona) ? loc.persona : null;
-    if (path.length === 0) { this.setState({ view: 'map', stack: [], selectedNodeId: null, persona, variantSel: variants }); return; }
+    if (path.length === 0) { this.setState({ view: 'map', stack: [], selectedStepId: null, persona, variantSel: variants }); return; }
     const last = path[path.length - 1]!;
-    const lastNodes = d.byId.get(displayed(last))?.nodes ?? [];
-    const node = loc.node && lastNodes.some((n) => n.id === loc.node) ? loc.node : this.firstNode(displayed(last));
-    this.setState({ view: 'journey', stack: this.buildStack(path, displayed), variantSel: variants, persona, selectedNodeId: node });
+    const lastSteps = d.byId.get(displayed(last))?.steps ?? [];
+    const step = loc.step && lastSteps.some((n) => n.id === loc.step) ? loc.step : this.firstStep(displayed(last));
+    this.setState({ view: 'journey', stack: this.buildStack(path, displayed), variantSel: variants, persona, selectedStepId: step });
   }
   stepInto(subId: string, callerNode: string) {
     const cur = this.curEntry();
     if (!cur) return;
-    this.setState((s) => ({ stack: [...s.stack, { id: subId, callerJourney: cur.id, callerNode }], selectedNodeId: this.firstNode(this.displayedId(subId)) }));
+    this.setState((s) => ({ stack: [...s.stack, { id: subId, callerJourney: cur.id, callerNode }], selectedStepId: this.firstStep(this.displayedId(subId)) }));
   }
   goCrumb(k: number) {
-    if (k === 0) { this.setState({ view: 'map', stack: [], selectedNodeId: null, persona: null }); return; } // Root = whole map, no lens/journey (clears the stack so the URL doesn't keep the old journey)
+    if (k === 0) { this.setState({ view: 'map', stack: [], selectedStepId: null, persona: null }); return; } // Root = whole map, no lens/journey (clears the stack so the URL doesn't keep the old journey)
     this.setState((s) => {
       const st = s.stack.slice(0, k);
-      return { stack: st, selectedNodeId: this.firstNode(this.displayedId(st[st.length - 1]!.id)) };
+      return { stack: st, selectedStepId: this.firstStep(this.displayedId(st[st.length - 1]!.id)) };
     });
   }
-  selectNode(id: string) { this.setState({ selectedNodeId: id }); }
+  selectNode(id: string) { this.setState({ selectedStepId: id }); }
   setPersona(id: string) { this.setState((s) => ({ persona: s.persona === id ? null : id })); }
   toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSettings({ theme }); return { theme }; }); }
   /** Copy a link to the exact current view (URL already encodes the location). */
@@ -623,7 +623,7 @@ export class App extends React.Component<AppProps, AppState> {
       ? `${journey.title}${journey.variantOf && journey.variantLabel ? ` — ${journey.variantLabel}` : ''}`
       : 'Root';
     const meta = journey
-      ? { title: flowName, subtitle: portsSummary(journey), legend: summarize(journey.nodes) }
+      ? { title: flowName, subtitle: portsSummary(journey), legend: summarize(journey.steps) }
       : { title: `${project} — Root`, subtitle: `${this.d().order.length} journeys · ${this.props.data.manifest?.personas?.length ?? 0} personas`, legend: `${this.d().order.length} journeys` };
     const dataUrl = await composeExportPng(el, vars, meta, this.state.exportOpts);
     const a = document.createElement('a');
@@ -639,27 +639,27 @@ export class App extends React.Component<AppProps, AppState> {
   toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSettings({ flow }); return { flow }; }); }
 
   step(dir: number) {
-    const ns = this.nodes();
+    const ns = this.steps();
     if (!ns.length) return;
     let i = this.selIndex();
     if (i < 0) i = 0;
     const ni = Math.max(0, Math.min(ns.length - 1, i + dir));
-    this.setState({ selectedNodeId: ns[ni]!.id });
+    this.setState({ selectedStepId: ns[ni]!.id });
   }
-  hop(nextId: string) { this.setState({ stack: [{ id: nextId }], selectedNodeId: this.firstNode(this.displayedId(nextId)) }); }
+  hop(nextId: string) { this.setState({ stack: [{ id: nextId }], selectedStepId: this.firstStep(this.displayedId(nextId)) }); }
 
   returnToParent() {
     const e = this.curEntry();
     if (!e?.callerJourney || !e.callerNode) return;
     // resolve the return edge against the parent's DISPLAYED version — a
-    // selected variant may route the caller node differently than the base
+    // selected variant may route the caller step differently than the base
     const parent = this.d().byId.get(this.displayedId(e.callerJourney));
     const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
-    this.setState((s) => ({ stack: s.stack.slice(0, -1), selectedNodeId: returnEdge?.to ?? e.callerNode ?? null }));
+    this.setState((s) => ({ stack: s.stack.slice(0, -1), selectedStepId: returnEdge?.to ?? e.callerNode ?? null }));
   }
 
   continueTarget(): { label: string; onClick: () => void } | null {
-    const ns = this.nodes();
+    const ns = this.steps();
     const cur = ns[this.selIndex()];
     const journey = this.curJourney();
     if (!cur || cur.type !== 'exit' || !journey) return null;
@@ -667,8 +667,8 @@ export class App extends React.Component<AppProps, AppState> {
     if (e?.callerJourney && e.callerNode) {
       const parent = this.d().byId.get(this.displayedId(e.callerJourney));
       const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
-      const returnNode = parent?.nodes.find((n) => n.id === returnEdge?.to);
-      return { label: `Return → ${returnNode ? nodeTitle(returnNode) : parent?.title ?? 'parent'}`, onClick: () => this.returnToParent() };
+      const returnNode = parent?.steps.find((n) => n.id === returnEdge?.to);
+      return { label: `Return → ${returnNode ? stepTitle(returnNode) : parent?.title ?? 'parent'}`, onClick: () => this.returnToParent() };
     }
     const link = journey.links.find((l) => l.exit === cur.port);
     const next = link ? this.d().byId.get(link.journey) : null;
@@ -681,7 +681,7 @@ export class App extends React.Component<AppProps, AppState> {
   // move. setPointerCapture keeps the gesture bound to the card even if the finger
   // slides off it; captured events still bubble to the window listeners below.
 
-  startDrag(kind: 'map' | 'node', id: string, key: string, baseX: number, baseY: number, e: React.PointerEvent) {
+  startDrag(kind: 'map' | 'step', id: string, key: string, baseX: number, baseY: number, e: React.PointerEvent) {
     if (e.button !== 0) return; // primary button / primary touch only
     e.preventDefault();
     const startX = e.clientX, startY = e.clientY, pointerId = e.pointerId;
@@ -693,11 +693,11 @@ export class App extends React.Component<AppProps, AppState> {
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
       if (!moved && Math.abs(dx) + Math.abs(dy) > 3) moved = true;
       if (!moved) return;
-      // no lower clamp — a node must be draggable left/up too, not pinned at the
+      // no lower clamp — a step must be draggable left/up too, not pinned at the
       // canvas origin (the old Math.max(0,…) stopped any leftward move dead at x=0)
       const p = { x: baseX + dx, y: baseY + dy };
       if (kind === 'map') this.setState((s) => ({ mapPos: { ...s.mapPos, [key]: p } }));
-      else this.setState((s) => ({ nodePos: { ...s.nodePos, [key]: p } }));
+      else this.setState((s) => ({ stepPos: { ...s.stepPos, [key]: p } }));
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
@@ -708,9 +708,9 @@ export class App extends React.Component<AppProps, AppState> {
       if (moved) return;
       if (kind === 'map') { this.enterJourney(id); return; }
       this.selectNode(id);
-      // notes hub open = annotate mode: a click also opens the note editor for this node
+      // notes hub open = annotate mode: a click also opens the note editor for this step
       const journey = this.curJourney();
-      if (this.state.notesOpen && journey) this.setState({ notePopover: { journey: journey.id, node: id }, noteDraft: '' });
+      if (this.state.notesOpen && journey) this.setState({ notePopover: { journey: journey.id, step: id }, noteDraft: '' });
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -741,9 +741,9 @@ export class App extends React.Component<AppProps, AppState> {
     const mapCards = d.order.map((id, idx) => {
       const b = d.byId.get(id)!;
       const inJ = !personaSet || personaSet.has(id);
-      const matchQ = !q || b.title.toLowerCase().includes(q) || b.id.includes(q) || b.nodes.some((n) => nodeTitle(n).toLowerCase().includes(q));
+      const matchQ = !q || b.title.toLowerCase().includes(q) || b.id.includes(q) || b.steps.some((n) => stepTitle(n).toLowerCase().includes(q));
       const dim = !inJ || !matchQ;
-      const built = b.nodes.filter((n) => n.status === 'built').length;
+      const built = b.steps.filter((n) => n.status === 'built').length;
       const mkey = (vertical ? 'v' : 'h') + ':' + id;
       const base = chainLayout.pos[id] ?? { x: 32, y: 32 };
       const mp = this.state.mapPos[mkey];
@@ -758,7 +758,7 @@ export class App extends React.Component<AppProps, AppState> {
       });
       return {
         id, index: `JOURNEY ${idx + 1}`, title: b.title, sub: portsSummary(b),
-        meta: `${b.nodes.length} nodes · ${built} built`,
+        meta: `${b.steps.length} steps · ${built} built`,
         statusText: statusMeta(b.status).label, statusStyle: statusPill(b.status),
         style: { position: 'absolute', left: px, top: py, width: CARD_W, height: CARD_H, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', boxShadow: 'var(--shadow)', padding: '13px 15px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', opacity: dim ? 0.34 : 1, transition: 'opacity 200ms ease, box-shadow 160ms ease', outline: inJ && personaSet ? '1.5px solid var(--accent)' : 'none', outlineOffset: -1.5 } as React.CSSProperties,
         entryPort: portStyle(vertical ? 'top' : 'left'), exitPort: portStyle(vertical ? 'bottom' : 'right'),
@@ -798,7 +798,7 @@ export class App extends React.Component<AppProps, AppState> {
       const seq = jJourneys ? jJourneys.indexOf(id) : -1;
       return [{
         id, inJ,
-        badge: jJourneys ? (inJ ? `${seq + 1}` : 'skip') : `${b.nodes.length}`,
+        badge: jJourneys ? (inJ ? `${seq + 1}` : 'skip') : `${b.steps.length}`,
         badgeStyle: jJourneys ? (inJ ? stepBadge : outBadge) : countBadge,
       }];
     });
@@ -827,7 +827,7 @@ export class App extends React.Component<AppProps, AppState> {
           </div>
           {open && subs.length > 0 && (
             <div style={css('margin-left:11px;padding-left:8px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
-              {subs.map((s) => railRow(s, `${path}${PATH_SEP}${s}`, inJ, `${d.byId.get(s)?.nodes.length ?? 0}`, countBadge, new Set([...visited, s])))}
+              {subs.map((s) => railRow(s, `${path}${PATH_SEP}${s}`, inJ, `${d.byId.get(s)?.steps.length ?? 0}`, countBadge, new Set([...visited, s])))}
             </div>
           )}
         </div>
@@ -836,7 +836,7 @@ export class App extends React.Component<AppProps, AppState> {
     const railHint = persona
       ? persona.persona ?? persona.title
       : isJourney
-        ? 'Step through nodes with the ◂ ▸ controls below. At an exit, follow the chip to the next journey.'
+        ? 'Step through steps with the ◂ ▸ controls below. At an exit, follow the chip to the next journey.'
         : 'Pick a persona to highlight their path, or open a journey. Journeys chain exit → entry into one continuous movie.';
 
     // journey view — `journey` is the displayed version; ghosts come from the others
@@ -846,17 +846,17 @@ export class App extends React.Component<AppProps, AppState> {
     const versions = baseJourney ? [baseJourney, ...variants] : [];
     const journey = this.curJourney();
     const journeyId = journey?.id ?? '';
-    const ns = this.nodes();
+    const ns = this.steps();
     const selI = this.selIndex();
     const activeSet = new Set(ns.slice(0, selI < 0 ? 0 : selI + 1).map((n) => n.id));
 
-    // with variants, lay out the UNION of all versions so shared nodes don't
+    // with variants, lay out the UNION of all versions so shared steps don't
     // jump when the picker switches; without, keep the plain per-journey layout
     const hasVariants = versions.length > 1;
-    const unionNodes: ApiNode[] = [];
+    const unionSteps: ApiStep[] = [];
     {
       const seen = new Set<string>();
-      versions.forEach((v) => v.nodes.forEach((n) => { if (!seen.has(n.id)) { seen.add(n.id); unionNodes.push(n); } }));
+      versions.forEach((v) => v.steps.forEach((n) => { if (!seen.has(n.id)) { seen.add(n.id); unionSteps.push(n); } }));
     }
     const unionEdgeKeys = new Set<string>();
     const unionEdges: Array<[string, string]> = [];
@@ -869,55 +869,55 @@ export class App extends React.Component<AppProps, AppState> {
     const journeyGaps = { main: vertical ? 64 : 84, cross: vertical ? 48 : 28 };
     const lay = journey
       ? hasVariants
-        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionNodes.map(sizedNode), unionEdges, vertical, journeyGaps)
-        : this.layout(journeyId, journey.nodes.map(sizedNode), journey.edges.map((e) => [e.from, e.to] as [string, string]), vertical, journeyGaps)
+        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionSteps.map(sizedStep), unionEdges, vertical, journeyGaps)
+        : this.layout(journeyId, journey.steps.map(sizedStep), journey.edges.map((e) => [e.from, e.to] as [string, string]), vertical, journeyGaps)
       : null;
-    const eff = (n: ApiNode) => {
+    const eff = (n: ApiStep) => {
       const base = lay?.pos[n.id] ?? { x: 32, y: 28 };
       const key = `${journeyId}:${vertical ? 'v' : 'h'}:${n.id}`;
-      const o = this.state.nodePos[key];
+      const o = this.state.stepPos[key];
       return { x: o?.x ?? base.x, y: o?.y ?? base.y, key };
     };
     const journeyRects: Record<string, Rect> = {};
-    (hasVariants ? unionNodes : ns).forEach((n) => { const p = eff(n); journeyRects[n.id] = { x: p.x, y: p.y, w: NODE_W, h: estimateNodeH(n) }; });
-    // frame offset: keep left/up-dragged nodes reachable, then rects hold rendered coords
+    (hasVariants ? unionSteps : ns).forEach((n) => { const p = eff(n); journeyRects[n.id] = { x: p.x, y: p.y, w: STEP_W, h: estimateStepH(n) }; });
+    // frame offset: keep left/up-dragged steps reachable, then rects hold rendered coords
     const jf = frameOffset(Object.values(journeyRects));
     if (jf.dx || jf.dy) for (const id in journeyRects) { journeyRects[id]!.x += jf.dx; journeyRects[id]!.y += jf.dy; }
 
     // diff vs the base (only meaningful when a variant is displayed)
-    const baseNodeById = new Map((baseJourney?.nodes ?? []).map((n) => [n.id, n]));
+    const baseNodeById = new Map((baseJourney?.steps ?? []).map((n) => [n.id, n]));
     const activeIds = new Set(ns.map((n) => n.id));
-    const nodeDiff = (n: ApiNode): 'new' | 'changed' | null => {
+    const stepDiff = (n: ApiStep): 'new' | 'changed' | null => {
       if (!journey?.variantOf) return null;
       const b = baseNodeById.get(n.id);
       if (!b) return 'new';
-      const sig = (x: ApiNode) => JSON.stringify([x.type, x.journey, x.port, x.label, x.status, x.note, x.contract, x.acceptance, x.refs]);
+      const sig = (x: ApiStep) => JSON.stringify([x.type, x.journey, x.port, x.label, x.status, x.note, x.contract, x.acceptance, x.refs]);
       return sig(n) !== sig(b) ? 'changed' : null;
     };
-    // ghosts: union nodes/edges not in the displayed version, at low opacity
-    const ghostNodes = hasVariants ? unionNodes.filter((n) => !activeIds.has(n.id)) : [];
+    // ghosts: union steps/edges not in the displayed version, at low opacity
+    const ghostSteps = hasVariants ? unionSteps.filter((n) => !activeIds.has(n.id)) : [];
     const activeEdgeKeys = new Set((journey?.edges ?? []).map((e) => `${e.from}>${e.to}`));
     const ghostEdges: EdgeTuple[] = hasVariants ? unionEdges.filter(([a, b]) => !activeEdgeKeys.has(`${a}>${b}`)) : [];
 
-    const journeyNodes = ns.map((n) => {
-      const isSel = n.id === this.state.selectedNodeId;
-      const kind = nodeKind(n);
+    const journeySteps = ns.map((n) => {
+      const isSel = n.id === this.state.selectedStepId;
+      const kind = stepKind(n);
       const p = eff(n);
       const status = n.status ?? 'planned';
       return {
-        id: n.id, title: nodeTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subJourney: n.journey, diff: nodeDiff(n),
+        id: n.id, title: stepTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subJourney: n.journey, diff: stepDiff(n),
         noteCount: journeyId ? this.openNotesFor(journeyId, n.id).length : 0,
         dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${status})`, flex: '0 0 auto' } as React.CSSProperties,
-        style: { position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
-        onPointerDown: (e: React.PointerEvent) => this.startDrag('node', n.id, p.key, p.x, p.y, e),
+        style: { position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: STEP_W, minHeight: STEP_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
+        onPointerDown: (e: React.PointerEvent) => this.startDrag('step', n.id, p.key, p.x, p.y, e),
       };
     });
     // vertical: hug content width so margin:auto centers the flow; horizontal keeps a
-    // min width; both grow to the framed extent so dragged-out nodes stay scrollable
+    // min width; both grow to the framed extent so dragged-out steps stay scrollable
     const baseW = vertical ? (lay?.w ?? 480) : Math.max(lay?.w ?? 480, 480);
     const journeyDims = lay ? { w: Math.max(baseW, jf.w), h: Math.max(360, jf.h) } : { w: 480, h: 360 };
     const journeyEdgeTuples: EdgeTuple[] = (journey?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
-    const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.state.selectedNodeId, (id) => this.selectNode(id), vertical) : null;
+    const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.state.selectedStepId, (id) => this.selectNode(id), vertical) : null;
 
     // crumbs
     const crumbBtn = (last: boolean): React.CSSProperties => ({ border: 'none', background: 'none', padding: '3px 6px', borderRadius: 5, color: last ? 'var(--fg)' : 'var(--dim)', fontWeight: last ? 600 : 500, fontSize: 12.5, cursor: last ? 'default' : 'pointer' });
@@ -949,7 +949,7 @@ export class App extends React.Component<AppProps, AppState> {
     const atEnd = selI >= ns.length - 1;
     const navBtn = (disabled: boolean): React.CSSProperties => ({ width: 32, height: 32, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: disabled ? 'var(--mute)' : 'var(--dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' });
     const selStatus = selNode?.status ?? 'planned';
-    // honest rule: criteria read as verified only when the node is built (has tests)
+    // honest rule: criteria read as verified only when the step is built (has tests)
     const chk = (_i: number) => selStatus === 'built';
     const detailShown = isJourney && !!selNode && this.state.detailOpen;
     const lensBlocked = isJourney && !!personaSet && !!topJourneyId && !personaSet.has(topJourneyId);
@@ -979,7 +979,7 @@ export class App extends React.Component<AppProps, AppState> {
           <div style={css('flex:1 1 auto;min-width:0;display:flex;justify-content:center;overflow:hidden;')}>
             {isMap && (
               <div style={{ ...css('position:relative;'), width: isNarrow ? '100%' : 320, maxWidth: isNarrow ? '100%' : '42vw' }}>
-                <input value={this.state.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Search journeys & nodes" style={{ ...css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;outline:none;'), fontSize: isNarrow ? 16 : 12.5 }} />
+                <input value={this.state.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Search journeys & steps" style={{ ...css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;outline:none;'), fontSize: isNarrow ? 16 : 12.5 }} />
                 <span style={css('position:absolute;left:9px;top:7px;color:var(--mute);font-size:13px;')}>⌕</span>
               </div>
             )}
@@ -998,7 +998,7 @@ export class App extends React.Component<AppProps, AppState> {
                 <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
               </div>
             )}
-            <button data-tip={this.state.notesOpen ? 'Notes hub open — click a node to note it' : 'Notes — annotate nodes, copy as prompt'} onClick={() => this.setState((s) => ({ notesOpen: !s.notesOpen, notePopover: null }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <button data-tip={this.state.notesOpen ? 'Notes hub open — click a step to note it' : 'Notes — annotate steps, copy as prompt'} onClick={() => this.setState((s) => ({ notesOpen: !s.notesOpen, notePopover: null }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Ic n="pencil" size={15} />
               {this.openNotes().length > 0 && (
                 <span style={css("position:absolute;top:-5px;right:-5px;min-width:14px;height:14px;border-radius:7px;background:var(--accent);color:var(--accentFg);font-size:9px;font-weight:700;line-height:14px;text-align:center;padding:0 3px;font-family:'JetBrains Mono',monospace;")}>{this.openNotes().length}</span>
@@ -1015,7 +1015,7 @@ export class App extends React.Component<AppProps, AppState> {
           <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 340, maxHeight: isNarrow ? '60vh' : '70vh' }}>
             <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
               <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Notes</div>
-              <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Click any node on a journey to leave a change-note.</div>
+              <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Click any step on a journey to leave a change-note.</div>
             </div>
             <div style={css('flex:1 1 auto;overflow-y:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px;')}>
               {this.allNotes().length === 0 && (
@@ -1023,12 +1023,12 @@ export class App extends React.Component<AppProps, AppState> {
               )}
               {this.allNotes().map((n) => {
                 const nb = this.d().byId.get(n.journey);
-                const nn = n.node ? nb?.nodes.find((x) => x.id === n.node) : undefined;
+                const nn = n.step ? nb?.steps.find((x) => x.id === n.step) : undefined;
                 const applied = n.status === 'applied';
                 return (
                   <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 9px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', opacity: applied ? 0.55 : 1 }}>
                     <div style={css('display:flex;align-items:center;gap:7px;')}>
-                      <button onClick={() => this.goToNote(n)} title="Go to node" style={css("border:none;background:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{nb?.title ?? n.journey}{nn ? ` › ${nodeTitle(nn)}` : ''}</button>
+                      <button onClick={() => this.goToNote(n)} title="Go to step" style={css("border:none;background:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{nb?.title ?? n.journey}{nn ? ` › ${stepTitle(nn)}` : ''}</button>
                       <span style={{ ...statusPill(applied ? 'built' : 'drifted'), marginLeft: 'auto', flex: '0 0 auto' }}>{n.status}</span>
                     </div>
                     <div style={{ fontSize: 12, lineHeight: 1.45, color: 'var(--fg)', textDecoration: applied ? 'line-through' : 'none' }}>{n.text}</div>
@@ -1126,7 +1126,7 @@ export class App extends React.Component<AppProps, AppState> {
                 <div ref={this.canvasEl} style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: vertical ? '32px auto' : 32 }}>
                   <div style={css('position:absolute;left:0;top:0;')}>{chainEdgesEl}</div>
                   {mapCards.map((m) => (
-                    <div key={m.id} data-export-node onPointerDown={m.onPointerDown} style={m.style}>
+                    <div key={m.id} data-export-step onPointerDown={m.onPointerDown} style={m.style}>
                       <span style={m.entryPort}></span>
                       <span style={m.exitPort}></span>
                       <div style={css('display:flex;align-items:center;justify-content:space-between;')}>
@@ -1201,20 +1201,20 @@ export class App extends React.Component<AppProps, AppState> {
                       <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, journeyRects, journeyDims, null, null, null, vertical)}</div>
                     )}
                     <div style={css('position:absolute;left:0;top:0;')}>{journeyEdgesEl}</div>
-                    {ghostNodes.map((n) => {
+                    {ghostSteps.map((n) => {
                       const p = eff(n);
-                      const kind = nodeKind(n);
+                      const kind = stepKind(n);
                       return (
-                        <div key={'ghost-' + n.id} data-export-node data-ghost style={{ position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: NODE_W, minHeight: NODE_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
+                        <div key={'ghost-' + n.id} data-export-step data-ghost style={{ position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: STEP_W, minHeight: STEP_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
                           <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                             <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);")}>{GLYPHS[kind]}{TYPE_TEXT[kind]}</span>
                           </div>
-                          <div style={css('font-size:13px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;margin-top:5px;')}>{nodeTitle(n)}</div>
+                          <div style={css('font-size:13px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;margin-top:5px;')}>{stepTitle(n)}</div>
                         </div>
                       );
                     })}
-                    {journeyNodes.map((n) => (
-                      <div key={n.id} data-export-node onPointerDown={n.onPointerDown} style={n.style}>
+                    {journeySteps.map((n) => (
+                      <div key={n.id} data-export-step onPointerDown={n.onPointerDown} style={n.style}>
                         <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
                           <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);display:flex;align-items:center;gap:5px;")}>{n.glyph}{n.typeText}</span>
                           <span style={css('display:flex;align-items:center;gap:5px;')}>
@@ -1237,23 +1237,23 @@ export class App extends React.Component<AppProps, AppState> {
                         )}
                       </div>
                     ))}
-                    {this.state.notePopover && this.state.notePopover.journey === journeyId && journeyRects[this.state.notePopover.node] && (
+                    {this.state.notePopover && this.state.notePopover.journey === journeyId && journeyRects[this.state.notePopover.step] && (
                       <div
                         onPointerDown={(e) => e.stopPropagation()}
-                        style={{ position: 'absolute', left: journeyRects[this.state.notePopover.node]!.x, top: journeyRects[this.state.notePopover.node]!.y + journeyRects[this.state.notePopover.node]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
+                        style={{ position: 'absolute', left: journeyRects[this.state.notePopover.step]!.x, top: journeyRects[this.state.notePopover.step]!.y + journeyRects[this.state.notePopover.step]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
                       >
-                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.state.notePopover.node}</div>
+                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.state.notePopover.step}</div>
                         <textarea
                           autoFocus
                           value={this.state.noteDraft}
                           onChange={(e) => this.setState({ noteDraft: e.target.value })}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.node, this.state.noteDraft); } if (e.key === 'Escape') this.setState({ notePopover: null }); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.step, this.state.noteDraft); } if (e.key === 'Escape') this.setState({ notePopover: null }); }}
                           placeholder="What should change here?"
                           style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: isNarrow ? 16 : 12.5, fontFamily: 'inherit', outline: 'none' }}
                         />
                         <div style={css('display:flex;align-items:center;justify-content:flex-end;gap:7px;')}>
                           <button onClick={() => this.setState({ notePopover: null, noteDraft: '' })} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
-                          <button onClick={() => void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.node, this.state.noteDraft)} disabled={!this.state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.state.noteDraft.trim() ? 'pointer' : 'default', opacity: this.state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
+                          <button onClick={() => void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.step, this.state.noteDraft)} disabled={!this.state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.state.noteDraft.trim() ? 'pointer' : 'default', opacity: this.state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
                         </div>
                       </div>
                     )}
@@ -1263,7 +1263,7 @@ export class App extends React.Component<AppProps, AppState> {
                   {(() => {
                     const detailToggle = (
                       <button
-                        data-tip={this.state.detailOpen ? 'Hide node detail' : 'Show node detail'}
+                        data-tip={this.state.detailOpen ? 'Hide step detail' : 'Show step detail'}
                         data-tip-pos="up"
                         onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))}
                         style={{ ...css('border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);display:flex;align-items:center;justify-content:center;'), flex: '0 0 auto', marginLeft: 'auto', width: isNarrow ? 36 : 30, height: isNarrow ? 36 : 30 }}
@@ -1271,8 +1271,8 @@ export class App extends React.Component<AppProps, AppState> {
                     );
                     const navGroup = (
                       <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
-                        <button data-tip="Previous node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}><Ic n="chevron-left" size={16} /></button>
-                        <button data-tip="Next node" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}><Ic n="chevron-right" size={16} /></button>
+                        <button data-tip="Previous step" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}><Ic n="chevron-left" size={16} /></button>
+                        <button data-tip="Next step" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}><Ic n="chevron-right" size={16} /></button>
                       </div>
                     );
                     const stepChip = <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>;
@@ -1307,10 +1307,10 @@ export class App extends React.Component<AppProps, AppState> {
                     <div style={{ ...css('border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:14px 34px;overflow-y:auto;animation:panelUp 200ms ease;'), padding: isNarrow ? '20px 16px calc(28px + env(safe-area-inset-bottom))' : '16px 18px', maxHeight: isNarrow ? '50vh' : 236 }}>
                       <div style={css('flex:0 0 auto;max-width:280px;display:flex;flex-direction:column;')}>
                         <div style={css('display:flex;align-items:center;gap:9px;')}>
-                          <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;color:var(--mute);")}>{TYPE_TEXT[nodeKind(selNode)]}</span>
+                          <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;color:var(--mute);")}>{TYPE_TEXT[stepKind(selNode)]}</span>
                           <span style={statusPill(selStatus)}>{statusMeta(selStatus).label}</span>
                         </div>
-                        <div style={css('font-size:16px;font-weight:650;letter-spacing:-0.01em;margin-top:8px;')}>{nodeTitle(selNode)}</div>
+                        <div style={css('font-size:16px;font-weight:650;letter-spacing:-0.01em;margin-top:8px;')}>{stepTitle(selNode)}</div>
                         <div style={css('font-size:12px;color:var(--dim);line-height:1.5;margin-top:6px;')}>{selNode.note ?? ''}</div>
                       </div>
 

@@ -20,8 +20,8 @@ export interface ValidationResult {
  * Validate a `.codestory/` directory: zod-parse every file, then run the
  * referential checks from KB #182 — links point to existing journeys/entries,
  * sub-journey refs exist, `refs` paths exist on disk (relative to the repo root,
- * i.e. the parent of `.codestory/`), `built` nodes have tests, exit ports are
- * declared, edges reference real nodes, ids are unique.
+ * i.e. the parent of `.codestory/`), `built` steps have tests, exit ports are
+ * declared, edges reference real steps, ids are unique.
  */
 export async function validateDir(dir: string): Promise<ValidationResult> {
   const issues: ValidationIssue[] = [];
@@ -71,29 +71,29 @@ export async function validateDir(dir: string): Promise<ValidationResult> {
   // referential checks
   for (const journey of journeys) {
     const file = join(dir, `${journey.id}.journey.json`);
-    const nodeIds = new Set<string>();
-    for (const n of journey.nodes) {
-      if (nodeIds.has(n.id)) push(file, `duplicate node id '${n.id}'`);
-      nodeIds.add(n.id);
+    const stepIds = new Set<string>();
+    for (const n of journey.steps) {
+      if (stepIds.has(n.id)) push(file, `duplicate step id '${n.id}'`);
+      stepIds.add(n.id);
 
-      if (n.journey && !byId.has(n.journey)) push(file, `node '${n.id}' references unknown sub-journey '${n.journey}'`);
-      else if (n.journey && byId.get(n.journey)!.variantOf) push(file, `node '${n.id}' sub-journey '${n.journey}' must be a base journey, not a variant`);
+      if (n.journey && !byId.has(n.journey)) push(file, `step '${n.id}' references unknown sub-journey '${n.journey}'`);
+      else if (n.journey && byId.get(n.journey)!.variantOf) push(file, `step '${n.id}' sub-journey '${n.journey}' must be a base journey, not a variant`);
       if (n.type === 'exit' && n.port && !journey.exits.includes(n.port)) {
-        push(file, `exit node '${n.id}' uses port '${n.port}' not declared in exits[]`);
+        push(file, `exit step '${n.id}' uses port '${n.port}' not declared in exits[]`);
       }
       if (n.status === 'built' && !(n.tests && n.tests.length > 0)) {
-        push(file, `node '${n.id}' is built but has no tests`);
+        push(file, `step '${n.id}' is built but has no tests`);
       }
       for (const ref of n.refs ?? []) {
         const path = ref.split('#')[0]!;
         const abs = resolve(repoRoot, path);
-        if (!path || !abs.startsWith(resolve(repoRoot))) push(file, `node '${n.id}' ref is not a repo-relative path: '${ref}'`);
-        else if (!existsSync(abs)) push(file, `node '${n.id}' ref not found on disk: ${path}`);
+        if (!path || !abs.startsWith(resolve(repoRoot))) push(file, `step '${n.id}' ref is not a repo-relative path: '${ref}'`);
+        else if (!existsSync(abs)) push(file, `step '${n.id}' ref not found on disk: ${path}`);
       }
     }
     for (const e of journey.edges) {
-      if (!nodeIds.has(e.from)) push(file, `edge references unknown node '${e.from}'`);
-      if (!nodeIds.has(e.to)) push(file, `edge references unknown node '${e.to}'`);
+      if (!stepIds.has(e.from)) push(file, `edge references unknown step '${e.from}'`);
+      if (!stepIds.has(e.to)) push(file, `edge references unknown step '${e.to}'`);
     }
     for (const l of journey.links) {
       if (!journey.exits.includes(l.exit)) push(file, `link from undeclared exit port '${l.exit}'`);
@@ -138,7 +138,7 @@ export async function validateDir(dir: string): Promise<ValidationResult> {
   }
 
   // notes.v0 sidecar (optional): schema-parse, then every note must reference an
-  // existing journey (base or variant) and, if set, an existing node on that journey;
+  // existing journey (base or variant) and, if set, an existing step on that journey;
   // ids are unique. Absent notes.json is fine.
   let notes: Note[] = [];
   if (files.includes('notes.json')) {
@@ -155,8 +155,8 @@ export async function validateDir(dir: string): Promise<ValidationResult> {
           seen.add(n.id);
           const journey = byId.get(n.journey);
           if (!journey) push(notesFile, `note '${n.id}' references unknown journey '${n.journey}'`);
-          else if (n.node && !journey.nodes.some((nd) => nd.id === n.node)) {
-            push(notesFile, `note '${n.id}' references unknown node '${n.node}' on journey '${n.journey}'`);
+          else if (n.step && !journey.steps.some((nd) => nd.id === n.step)) {
+            push(notesFile, `note '${n.id}' references unknown step '${n.step}' on journey '${n.journey}'`);
           }
         }
       }

@@ -47,10 +47,10 @@ export function buildApp(codestoryDir: string, distDir: string = VIEWER_DIST): H
   //   { clear: true }        → remove every note
   //   { id, delete: true }   → remove one note
   //   { id, status }         → flip an existing note's status
-  //   { journey, node?, text } → append a new note (journeys stay read-only)
+  //   { journey, step?, text } → append a new note (journeys stay read-only)
   app.post('/api/notes', async (c) => {
     const body = (await c.req.json().catch(() => null)) as
-      | { id?: string; status?: string; delete?: boolean; clear?: boolean; journey?: string; node?: string; text?: string }
+      | { id?: string; status?: string; delete?: boolean; clear?: boolean; journey?: string; step?: string; text?: string }
       | null;
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
 
@@ -70,18 +70,18 @@ export function buildApp(codestoryDir: string, distDir: string = VIEWER_DIST): H
       return c.json(updated);
     }
 
-    const { journey, node, text } = body;
+    const { journey, step, text } = body;
     if (typeof journey !== 'string' || !journey) return c.json({ error: 'journey is required' }, 400);
     if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
-    if (node !== undefined && typeof node !== 'string') return c.json({ error: 'node must be a string' }, 400);
+    if (step !== undefined && typeof step !== 'string') return c.json({ error: 'step must be a string' }, 400);
 
     // validate ids against the loaded journeys — never write a note that dangles
     const { journeys } = await validateDir(codestoryDir);
     const target = journeys.find((b) => b.id === journey);
     if (!target) return c.json({ error: `unknown journey '${journey}'` }, 400);
-    if (node && !target.nodes.some((n) => n.id === node)) return c.json({ error: `unknown node '${node}' on journey '${journey}'` }, 400);
+    if (step && !target.steps.some((s) => s.id === step)) return c.json({ error: `unknown step '${step}' on journey '${journey}'` }, 400);
 
-    const note = appendNote(codestoryDir, { journey, ...(node ? { node } : {}), text });
+    const note = appendNote(codestoryDir, { journey, ...(step ? { step } : {}), text });
     return c.json(note);
   });
 
