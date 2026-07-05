@@ -8,7 +8,9 @@ import { loadSettings } from './settings';
 import { createAppStore, type AppInit, type AppState } from './store';
 import { ExportPopover } from './components/ExportPopover';
 import { Header } from './components/Header';
+import { DetailPanel } from './components/DetailPanel';
 import { Rail } from './components/Rail';
+import { Transport } from './components/Transport';
 import { NotesHub } from './components/NotesHub';
 import { PromptModal } from './components/PromptModal';
 import { VersionsPicker } from './components/VersionsPicker';
@@ -722,7 +724,6 @@ export function App(props: AppProps) {
     const cont = continueTarget();
     const atStart = selI <= 0;
     const atEnd = selI >= ns.length - 1;
-    const navBtn = (disabled: boolean): React.CSSProperties => ({ width: 32, height: 32, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: disabled ? 'var(--mute)' : 'var(--dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' });
     const selStatus = selNode?.status ?? 'planned';
     // honest rule: criteria read as verified only when the step is built (has tests)
     const chk = (_i: number) => selStatus === 'built';
@@ -932,106 +933,20 @@ export function App(props: AppProps) {
                   </div>
                 </div>
                 <div style={css('flex:0 0 auto;border-top:1px solid var(--border);background:var(--surface);z-index:10;')}>
-                  {(() => {
-                    const detailToggle = (
-                      <button
-                        data-tip={state.detailOpen ? 'Hide step detail' : 'Show step detail'}
-                        data-tip-pos="up"
-                        onClick={() => state.toggleDetail()}
-                        style={{ ...css('border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);display:flex;align-items:center;justify-content:center;'), flex: '0 0 auto', marginLeft: 'auto', width: isNarrow ? 36 : 30, height: isNarrow ? 36 : 30 }}
-                      >{state.detailOpen ? <Ic n="chevron-down" size={isNarrow ? 19 : 16} /> : <Ic n="chevron-up" size={isNarrow ? 19 : 16} />}</button>
-                    );
-                    const navGroup = (
-                      <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
-                        <button data-tip="Previous step" data-tip-pos="up" data-tip-align="left" onClick={() => step(-1)} style={navBtn(atStart)}><Ic n="chevron-left" size={16} /></button>
-                        <button data-tip="Next step" data-tip-pos="up" data-tip-align="left" onClick={() => step(1)} style={navBtn(atEnd)}><Ic n="chevron-right" size={16} /></button>
-                      </div>
-                    );
-                    const stepChip = <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>;
-                    const progress = (grow: boolean) => (
-                      <div style={{ ...css('height:4px;border-radius:3px;background:var(--inset);overflow:hidden;'), flex: grow ? '1 1 auto' : '0 0 120px' }}>
-                        <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', borderRadius: 3, transition: 'width 220ms ease' }}></div>
-                      </div>
-                    );
-                    // block=true → full-width own-row button (phone: no horizontal squeeze, so no clipping)
-                    const contChip = (block: boolean) => cont && (
-                      <button onClick={cont.onClick} style={{ ...css('border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;animation:slideUp 220ms ease;'), ...(block ? { width: '100%', minHeight: 38, padding: '8px 13px', lineHeight: 1.3, textAlign: 'center' as const } : { height: 32, padding: '0 13px', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }}>{cont.label}</button>
-                    );
-                    return isNarrow ? (
-                      // phone: controls row (chevron pinned right), then narration row — canvas keeps its space
-                      <div style={{ ...css('display:flex;flex-direction:column;gap:10px;'), padding: '12px 12px calc(14px + env(safe-area-inset-bottom))' }}>
-                        <div style={css('display:flex;align-items:center;gap:10px;')}>
-                          {navGroup}{stepChip}{progress(true)}{detailToggle}
-                        </div>
-                        <div style={{ ...css('font-size:12.5px;color:var(--fg);line-height:1.4;'), display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{narration}</div>
-                        {contChip(true)}
-                      </div>
-                    ) : (
-                      <div style={css('min-height:56px;display:flex;align-items:center;gap:14px;padding:9px 16px;')}>
-                        {navGroup}{stepChip}{progress(false)}
-                        <div style={css('flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--fg);line-height:1.45;')}>{narration}</div>
-                        {contChip(false)}{detailToggle}
-                      </div>
-                    );
-                  })()}
-
+                  <Transport
+                    narration={narration}
+                    stepLabel={stepLabel}
+                    pct={pct}
+                    cont={cont}
+                    atStart={atStart}
+                    atEnd={atEnd}
+                    isNarrow={isNarrow}
+                    detailOpen={state.detailOpen}
+                    step={step}
+                    toggleDetail={state.toggleDetail}
+                  />
                   {detailShown && selNode && (
-                    <div style={{ ...css('border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:14px 34px;overflow-y:auto;animation:panelUp 200ms ease;'), padding: isNarrow ? '20px 16px calc(28px + env(safe-area-inset-bottom))' : '16px 18px', maxHeight: isNarrow ? '50vh' : 236 }}>
-                      <div style={css('flex:0 0 auto;max-width:280px;display:flex;flex-direction:column;')}>
-                        <div style={css('display:flex;align-items:center;gap:9px;')}>
-                          <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;color:var(--mute);")}>{TYPE_TEXT[stepKind(selNode)]}</span>
-                          <span style={statusPill(selStatus)}>{statusMeta(selStatus).label}</span>
-                        </div>
-                        <div style={css('font-size:16px;font-weight:650;letter-spacing:-0.01em;margin-top:8px;')}>{stepTitle(selNode)}</div>
-                        <div style={css('font-size:12px;color:var(--dim);line-height:1.5;margin-top:6px;')}>{selNode.note ?? ''}</div>
-                      </div>
-
-                      {(selNode.refs?.length ?? 0) > 0 && (
-                        <div style={css('flex:0 0 auto;')}>
-                          <div style={css('font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);margin-bottom:8px;')}>Code refs</div>
-                          <div style={css('display:flex;flex-direction:column;gap:5px;')}>
-                            {selNode.refs!.map((r, i) => (
-                              <span key={i} style={css("font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--fg);background:var(--inset);border:1px solid var(--border);border-radius:5px;padding:4px 8px;")}>{r}</span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {selNode.contract && (
-                        <div style={css('flex:0 0 auto;')}>
-                          <div style={css('font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);margin-bottom:8px;')}>Contract</div>
-                          <div style={css("display:flex;flex-direction:column;gap:6px;font-family:'JetBrains Mono',monospace;font-size:11px;")}>
-                            <div style={css('display:flex;gap:8px;')}><span style={css('color:var(--mute);width:30px;flex:0 0 auto;')}>in</span><span style={css('color:var(--fg);')}>{selNode.contract.in ?? '—'}</span></div>
-                            <div style={css('display:flex;gap:8px;')}><span style={css('color:var(--mute);width:30px;flex:0 0 auto;')}>out</span><span style={css('color:var(--fg);')}>{selNode.contract.out ?? '—'}</span></div>
-                          </div>
-                        </div>
-                      )}
-
-                      {(selNode.acceptance?.length ?? 0) > 0 && (
-                        <div style={css('flex:0 0 auto;')}>
-                          <div style={css('font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);margin-bottom:8px;')}>Acceptance</div>
-                          <div style={css('display:flex;flex-direction:column;gap:6px;')}>
-                            {selNode.acceptance!.map((a, i) => {
-                              const on = chk(i);
-                              return (
-                                <div key={i} style={css('display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.4;')}>
-                                  <span style={{ flex: '0 0 auto', width: 15, height: 15, borderRadius: 4, border: `1px solid ${on ? 'var(--built)' : 'var(--borderStrong)'}`, background: on ? 'var(--built)' : 'transparent', color: '#fff', fontSize: 10, lineHeight: '13px', textAlign: 'center', marginTop: 1 }}>{on ? '✓' : ''}</span>
-                                  <span style={{ color: on ? 'var(--fg)' : 'var(--dim)' }}>{a}</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {selNode.ticket && (
-                        <div style={css('flex:0 0 auto;')}>
-                          <div style={css('font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);margin-bottom:8px;')}>Ticket</div>
-                          <span style={css("font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:5px;padding:4px 9px;")}>{selNode.ticket}</span>
-                        </div>
-                      )}
-
-                    </div>
+                    <DetailPanel selNode={selNode} selStatus={selStatus} isNarrow={isNarrow} chk={chk} />
                   )}
                 </div>
               </div>
