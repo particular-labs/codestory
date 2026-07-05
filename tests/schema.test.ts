@@ -28,10 +28,10 @@ const journey = {
   nonGoals: ['no auto-assign without accept'],
   entries: ['start'],
   exits: ['assigned', 'failed'],
-  nodes: [
+  steps: [
     {
       id: 'trig',
-      type: 'step',
+      type: 'action',
       label: 'Checkout trigger',
       note: 'narration for play mode',
       refs: ['src/dispatch/trigger.ts#TurnoverTrigger'],
@@ -46,7 +46,7 @@ const journey = {
       ticket: 'keel://ticket/123',
       ui: '/ops/turnovers',
     },
-    { id: 'match', type: 'step', label: 'Match cleaner', journey: 'match-cleaner', with: { mode: 'ranked' } },
+    { id: 'match', type: 'action', label: 'Match cleaner', journey: 'match-cleaner', with: { mode: 'ranked' } },
     { id: 'x', type: 'exit', port: 'assigned' },
   ],
   edges: [{ from: 'trig', to: 'match', label: 'window open', when: 'pool.size > 0' }],
@@ -74,42 +74,42 @@ describe('JourneySchema', () => {
   test('parses the spec example', () => {
     const b = JourneySchema.parse(journey);
     expect(b.id).toBe('turnover-dispatch');
-    expect(b.nodes).toHaveLength(3);
+    expect(b.steps).toHaveLength(3);
     expect(b.links[0]?.entry).toBe('start');
   });
 
-  test('minimal journey = nodes+edges envelope only', () => {
+  test('minimal journey = steps+edges envelope only', () => {
     const b = JourneySchema.parse({
       $schema: 'codestory/journey.v0',
       version: 1,
       id: 'mini',
       title: 'Mini',
-      nodes: [{ id: 'a', type: 'step', label: 'A' }],
+      steps: [{ id: 'a', type: 'action', label: 'A' }],
     });
     expect(b.status).toBe('planned'); // defaults
     expect(b.edges).toEqual([]);
     expect(b.exits).toEqual([]);
   });
 
-  test('rejects unknown node type', () => {
-    const bad = { ...journey, nodes: [{ id: 'a', type: 'subflow', label: 'A' }] };
+  test('rejects unknown step type', () => {
+    const bad = { ...journey, steps: [{ id: 'a', type: 'subflow', label: 'A' }] };
     expect(() => JourneySchema.parse(bad)).toThrow();
   });
 
-  test('step node requires label', () => {
-    const bad = { ...journey, nodes: [{ id: 'a', type: 'step' }] };
+  test('step step requires label', () => {
+    const bad = { ...journey, steps: [{ id: 'a', type: 'action' }] };
     expect(() => JourneySchema.parse(bad)).toThrow(/label/);
   });
 
-  test('exit node requires port, label optional', () => {
-    const noPort = { ...journey, nodes: [{ id: 'a', type: 'exit' }] };
+  test('exit step requires port, label optional', () => {
+    const noPort = { ...journey, steps: [{ id: 'a', type: 'exit' }] };
     expect(() => JourneySchema.parse(noPort)).toThrow(/port/);
-    const ok = { ...journey, nodes: [{ id: 'a', type: 'exit', port: 'assigned' }] };
-    expect(JourneySchema.parse(ok).nodes[0]?.port).toBe('assigned');
+    const ok = { ...journey, steps: [{ id: 'a', type: 'exit', port: 'assigned' }] };
+    expect(JourneySchema.parse(ok).steps[0]?.port).toBe('assigned');
   });
 
   test('rejects unknown keys (agent typo guard)', () => {
-    const bad = { ...journey, nodes: [{ id: 'a', type: 'step', label: 'A', lable: 'typo' }] };
+    const bad = { ...journey, steps: [{ id: 'a', type: 'action', label: 'A', lable: 'typo' }] };
     expect(() => JourneySchema.parse(bad)).toThrow();
   });
 
@@ -126,8 +126,8 @@ const notesFile = {
   $schema: 'codestory/notes.v0',
   version: 1,
   notes: [
-    { id: 'n1', journey: 'turnover-dispatch', node: 'trig', text: 'tighten the window', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
-    { id: 'n2', journey: 'turnover-dispatch', text: 'journey-level note, no node', status: 'applied', createdAt: '2026-07-03T00:00:00.000Z' },
+    { id: 'n1', journey: 'turnover-dispatch', step: 'trig', text: 'tighten the window', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
+    { id: 'n2', journey: 'turnover-dispatch', text: 'journey-level note, no step', status: 'applied', createdAt: '2026-07-03T00:00:00.000Z' },
   ],
 };
 
@@ -135,8 +135,8 @@ describe('NotesFileSchema', () => {
   test('parses a valid notes file', () => {
     const f = NotesFileSchema.parse(notesFile);
     expect(f.notes).toHaveLength(2);
-    expect(f.notes[0]?.node).toBe('trig');
-    expect(f.notes[1]?.node).toBeUndefined(); // node is optional
+    expect(f.notes[0]?.step).toBe('trig');
+    expect(f.notes[1]?.step).toBeUndefined(); // step is optional
   });
 
   test('status defaults to open', () => {

@@ -1,6 +1,6 @@
 // Pure canvas framing: given the rects of everything on the canvas, how far to
 // shift so nothing sits at negative coords — the scroll container can't scroll past
-// 0, so a node dragged left/up would otherwise vanish under the rail, unreachable.
+// 0, so a step dragged left/up would otherwise vanish under the rail, unreachable.
 // Shifting pins it at the canvas edge instead and the reported extent grows the
 // canvas so the rest stays horizontally/vertically scrollable.
 export interface Rectish { x: number; y: number; w: number; h: number }

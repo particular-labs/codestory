@@ -33,9 +33,9 @@ const alpha: Json = {
   title: 'Alpha',
   entries: ['start'],
   exits: ['done'],
-  nodes: [
-    { id: 'a', type: 'step', label: 'A' },
-    { id: 'sub', type: 'step', label: 'Sub', journey: 'beta' },
+  steps: [
+    { id: 'a', type: 'action', label: 'A' },
+    { id: 'sub', type: 'action', label: 'Sub', journey: 'beta' },
     { id: 'x', type: 'exit', port: 'done' },
   ],
   edges: [
@@ -51,7 +51,7 @@ const beta: Json = {
   id: 'beta',
   title: 'Beta',
   entries: ['start'],
-  nodes: [{ id: 'b', type: 'step', label: 'B' }],
+  steps: [{ id: 'b', type: 'action', label: 'B' }],
 };
 
 const good = {
@@ -89,7 +89,7 @@ describe('validateDir', () => {
   test('schema violation reported with file', async () => {
     const r = await issuesOf({
       ...good,
-      '.codestory/bad.journey.json': { $schema: 'codestory/journey.v0', version: 1, id: 'bad', title: 'Bad', nodes: [{ id: 'n', type: 'wat', label: 'N' }] },
+      '.codestory/bad.journey.json': { $schema: 'codestory/journey.v0', version: 1, id: 'bad', title: 'Bad', steps: [{ id: 'n', type: 'wat', label: 'N' }] },
     });
     expect(r.ok).toBe(false);
     expect(r.issues.some((i) => i.file.includes('bad.journey.json'))).toBe(true);
@@ -113,20 +113,20 @@ describe('validateDir', () => {
     expect(r.issues.some((i) => i.message.includes('undeclared'))).toBe(true);
   });
 
-  test('exit node port not in exits[] → issue', async () => {
-    const a = { ...alpha, exits: [], links: [], nodes: alpha.nodes };
+  test('exit step port not in exits[] → issue', async () => {
+    const a = { ...alpha, exits: [], links: [], steps: alpha.steps };
     const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('done'))).toBe(true);
   });
 
   test('sub-journey ref to unknown journey → issue', async () => {
-    const nodes = [{ id: 'sub', type: 'step', label: 'Sub', journey: 'ghost' }];
-    const a = { ...alpha, nodes, edges: [], links: [] };
+    const steps = [{ id: 'sub', type: 'action', label: 'Sub', journey: 'ghost' }];
+    const a = { ...alpha, steps, edges: [], links: [] };
     const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
-  test('edge endpoints must be node ids', async () => {
+  test('edge endpoints must be step ids', async () => {
     const a = { ...alpha, edges: [{ from: 'a', to: 'nowhere' }] };
     const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
     expect(r.issues.some((i) => i.message.includes('nowhere'))).toBe(true);
@@ -135,7 +135,7 @@ describe('validateDir', () => {
   test('refs must exist on disk, relative to repo root', async () => {
     const withRef = (ref: string): Json => ({
       ...alpha,
-      nodes: [{ id: 'a', type: 'step', label: 'A', refs: [ref] }],
+      steps: [{ id: 'a', type: 'action', label: 'A', refs: [ref] }],
       edges: [], links: [],
     });
     const missing = await issuesOf({ ...good, '.codestory/alpha.journey.json': withRef('src/nope.ts') });
@@ -152,7 +152,7 @@ describe('validateDir', () => {
   test('empty or repo-escaping refs → issue', async () => {
     const withRef = (ref: string): Json => ({
       ...alpha,
-      nodes: [{ id: 'a', type: 'step', label: 'A', refs: [ref] }],
+      steps: [{ id: 'a', type: 'action', label: 'A', refs: [ref] }],
       edges: [], links: [],
     });
     const empty = await issuesOf({ ...good, '.codestory/alpha.journey.json': withRef('#Missing') });
@@ -161,10 +161,10 @@ describe('validateDir', () => {
     expect(escape.issues.some((i) => i.message.includes('repo-relative'))).toBe(true);
   });
 
-  test('built node without tests → issue', async () => {
+  test('built step without tests → issue', async () => {
     const a = {
       ...alpha,
-      nodes: [{ id: 'a', type: 'step', label: 'A', status: 'built' }],
+      steps: [{ id: 'a', type: 'action', label: 'A', status: 'built' }],
       edges: [], links: [],
     };
     const r = await issuesOf({ ...good, '.codestory/alpha.journey.json': a });
@@ -177,13 +177,13 @@ describe('validateDir', () => {
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
-  test('duplicate journey ids and node ids → issues', async () => {
+  test('duplicate journey ids and step ids → issues', async () => {
     const dupJourney = { ...beta, id: 'alpha' };
     const r = await issuesOf({ ...good, '.codestory/beta.journey.json': dupJourney });
     expect(r.issues.some((i) => i.message.includes('duplicate journey id'))).toBe(true);
 
-    const dupNodes = { ...beta, nodes: [{ id: 'b', type: 'step', label: 'B' }, { id: 'b', type: 'step', label: 'B2' }] };
-    const r2 = await issuesOf({ ...good, '.codestory/beta.journey.json': dupNodes });
+    const dupSteps = { ...beta, steps: [{ id: 'b', type: 'action', label: 'B' }, { id: 'b', type: 'action', label: 'B2' }] };
+    const r2 = await issuesOf({ ...good, '.codestory/beta.journey.json': dupSteps });
     expect(r2.issues.some((i) => i.message.includes("'b'"))).toBe(true);
   });
 
@@ -205,7 +205,7 @@ describe('validateDir', () => {
   });
 
   test('variant ports must match the base (ports are the contract)', async () => {
-    const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha', exits: ['other'], links: [], nodes: [{ id: 'a', type: 'step', label: 'A' }], edges: [] };
+    const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha', exits: ['other'], links: [], steps: [{ id: 'a', type: 'action', label: 'A' }], edges: [] };
     const r = await issuesOf({ ...good, '.codestory/alpha@v2.journey.json': variant });
     expect(r.issues.some((i) => i.message.match(/exits.*match base/))).toBe(true);
   });
@@ -214,11 +214,11 @@ describe('validateDir', () => {
     const variant = { ...alpha, id: 'alpha@v2', variantOf: 'alpha' };
     const withVariant = { ...good, '.codestory/alpha@v2.journey.json': variant };
 
-    const badLink = { ...beta, entries: ['start'], exits: ['out'], nodes: [...(beta.nodes as unknown[]), { id: 'x', type: 'exit', port: 'out' }], links: [{ exit: 'out', journey: 'alpha@v2', entry: 'start' }] };
+    const badLink = { ...beta, entries: ['start'], exits: ['out'], steps: [...(beta.steps as unknown[]), { id: 'x', type: 'exit', port: 'out' }], links: [{ exit: 'out', journey: 'alpha@v2', entry: 'start' }] };
     const r1 = await issuesOf({ ...withVariant, '.codestory/beta.journey.json': badLink });
     expect(r1.issues.some((i) => i.message.match(/base journey/))).toBe(true);
 
-    const badSub = { ...beta, nodes: [{ id: 'b', type: 'step', label: 'B', journey: 'alpha@v2' }] };
+    const badSub = { ...beta, steps: [{ id: 'b', type: 'action', label: 'B', journey: 'alpha@v2' }] };
     const r2 = await issuesOf({ ...withVariant, '.codestory/beta.journey.json': badSub });
     expect(r2.issues.some((i) => i.message.match(/base journey/))).toBe(true);
 
@@ -254,11 +254,11 @@ describe('validateDir', () => {
     expect(r.notes).toEqual([]);
   });
 
-  test('valid notes referencing real journey + node → green, notes returned', async () => {
+  test('valid notes referencing real journey + step → green, notes returned', async () => {
     const r = await issuesOf({
       ...good,
       '.codestory/notes.json': notesFile([
-        { id: 'n1', journey: 'alpha', node: 'a', text: 'fix A', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
+        { id: 'n1', journey: 'alpha', step: 'a', text: 'fix A', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
         { id: 'n2', journey: 'beta', text: 'journey note', status: 'applied', createdAt: '2026-07-03T00:00:00.000Z' },
       ]),
     });
@@ -276,10 +276,10 @@ describe('validateDir', () => {
     expect(r.issues.some((i) => i.message.includes('ghost'))).toBe(true);
   });
 
-  test('note referencing unknown node on a real journey → issue', async () => {
+  test('note referencing unknown step on a real journey → issue', async () => {
     const r = await issuesOf({
       ...good,
-      '.codestory/notes.json': notesFile([{ id: 'n', journey: 'alpha', node: 'nope', text: 't', createdAt: 'x' }]),
+      '.codestory/notes.json': notesFile([{ id: 'n', journey: 'alpha', step: 'nope', text: 't', createdAt: 'x' }]),
     });
     expect(r.ok).toBe(false);
     expect(r.issues.some((i) => i.message.includes('nope'))).toBe(true);
@@ -309,7 +309,7 @@ describe('validateDir', () => {
     const r = await issuesOf({
       ...good,
       '.codestory/alpha@v2.journey.json': variant,
-      '.codestory/notes.json': notesFile([{ id: 'n', journey: 'alpha@v2', node: 'a', text: 't', createdAt: 'x' }]),
+      '.codestory/notes.json': notesFile([{ id: 'n', journey: 'alpha@v2', step: 'a', text: 't', createdAt: 'x' }]),
     });
     expect(r.issues).toEqual([]);
   });

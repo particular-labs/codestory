@@ -15,7 +15,7 @@ function fixtureRepo(): string {
   }));
   writeFileSync(join(dir, 'alpha.journey.json'), JSON.stringify({
     $schema: 'codestory/journey.v0', version: 1, id: 'alpha', title: 'Alpha',
-    entries: ['start'], nodes: [{ id: 'a', type: 'step', label: 'A' }],
+    entries: ['start'], steps: [{ id: 'a', type: 'action', label: 'A' }],
   }));
   return dir;
 }
@@ -87,12 +87,12 @@ describe('notes API', () => {
   test('POST creates a note, persists notes.json, GET returns it', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    const res = await app.request(postJson({ journey: 'alpha', node: 'a', text: 'tighten this' }));
+    const res = await app.request(postJson({ journey: 'alpha', step: 'a', text: 'tighten this' }));
     expect(res.status).toBe(200);
-    const note = (await res.json()) as { id: string; status: string; journey: string; node?: string; createdAt: string };
+    const note = (await res.json()) as { id: string; status: string; journey: string; step?: string; createdAt: string };
     expect(note.id).toBeTruthy();
     expect(note.status).toBe('open');
-    expect(note.node).toBe('a');
+    expect(note.step).toBe('a');
     expect(note.createdAt).toMatch(/\dT\d/); // ISO-ish
 
     expect(existsSync(join(dir, 'notes.json'))).toBe(true);
@@ -109,10 +109,10 @@ describe('notes API', () => {
     expect(v.ok).toBe(true);
   });
 
-  test('POST 400s on unknown journey or node', async () => {
+  test('POST 400s on unknown journey or step', async () => {
     const app = buildApp(fixtureRepo(), fakeDist());
     expect((await app.request(postJson({ journey: 'ghost', text: 'x' }))).status).toBe(400);
-    expect((await app.request(postJson({ journey: 'alpha', node: 'nope', text: 'x' }))).status).toBe(400);
+    expect((await app.request(postJson({ journey: 'alpha', step: 'nope', text: 'x' }))).status).toBe(400);
     expect((await app.request(postJson({ journey: 'alpha', text: '' }))).status).toBe(400);
     expect((await app.request(postJson({ text: 'no journey' }))).status).toBe(400);
   });
@@ -120,7 +120,7 @@ describe('notes API', () => {
   test('POST with { id, status } flips status and persists', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    const note = (await (await app.request(postJson({ journey: 'alpha', node: 'a', text: 'do it' }))).json()) as { id: string };
+    const note = (await (await app.request(postJson({ journey: 'alpha', step: 'a', text: 'do it' }))).json()) as { id: string };
 
     const res = await app.request(postJson({ id: note.id, status: 'applied' }));
     expect(res.status).toBe(200);
@@ -139,7 +139,7 @@ describe('notes API', () => {
   test('POST with { id, delete } removes the note and persists', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    const note = (await (await app.request(postJson({ journey: 'alpha', node: 'a', text: 'scrap this' }))).json()) as { id: string };
+    const note = (await (await app.request(postJson({ journey: 'alpha', step: 'a', text: 'scrap this' }))).json()) as { id: string };
 
     const res = await app.request(postJson({ id: note.id, delete: true }));
     expect(res.status).toBe(200);
@@ -152,7 +152,7 @@ describe('notes API', () => {
   test('POST with { clear } empties all notes', async () => {
     const dir = fixtureRepo();
     const app = buildApp(dir, fakeDist());
-    await app.request(postJson({ journey: 'alpha', node: 'a', text: 'one' }));
+    await app.request(postJson({ journey: 'alpha', step: 'a', text: 'one' }));
     await app.request(postJson({ journey: 'alpha', text: 'two' }));
 
     const res = await app.request(postJson({ clear: true }));

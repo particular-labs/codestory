@@ -17,8 +17,8 @@ Requires Node >= 20. `present --no-open` skips launching the browser; `--port` c
 ## How it works
 
 - **`.codestory/codestory.json`** — the manifest: project name + named personas (entry lenses into the graph).
-- **`.codestory/<id>.journey.json`** — one journey per flow: `nodes` (step / decision / exit), `edges`, declared `entries` / `exits`, and `links` that connect an exit port to another journey's entry.
-- **`validate`** enforces the contract: links/personas point at real journeys and entries, exit nodes use declared ports, `built` nodes carry tests, `refs` resolve on disk, ids are unique, and variant journeys keep the same ports as their base.
+- **`.codestory/<id>.journey.json`** — one journey per flow: `steps` (action / decision / exit), `edges`, declared `entries` / `exits`, and `links` that connect an exit port to another journey's entry.
+- **`validate`** enforces the contract: links/personas point at real journeys and entries, exit steps use declared ports, `built` steps carry tests, `refs` resolve on disk, ids are unique, and variant journeys keep the same ports as their base.
 
 ## Schema
 

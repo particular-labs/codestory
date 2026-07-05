@@ -26,9 +26,9 @@ export function scaffoldDir(dir: string, project: string): void {
     title: 'Example journey',
     entries: ['start'],
     exits: [],
-    nodes: [
-      { id: 'start', type: 'step', label: 'Start here' },
-      { id: 'done', type: 'step', label: 'Done' },
+    steps: [
+      { id: 'start', type: 'action', label: 'Start here' },
+      { id: 'done', type: 'action', label: 'Done' },
     ],
     edges: [{ from: 'start', to: 'done' }],
   };

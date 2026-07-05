@@ -1,21 +1,21 @@
 import { z } from 'zod';
 
 // SSOT: Keel KB #182 "Codestory v1 Spec" — schema section. Keys stay boring
-// (nodes/edges/entries/exits/links/personas) for agent/stranger parseability.
+// (steps/edges/entries/exits/links/personas) for agent/stranger parseability.
 
 export const StatusSchema = z.enum(['planned', 'built', 'drifted']);
 export type Status = z.infer<typeof StatusSchema>;
 
-export const NodeTypeSchema = z.enum(['step', 'decision', 'exit']);
-export type NodeType = z.infer<typeof NodeTypeSchema>;
+export const StepTypeSchema = z.enum(['action', 'decision', 'exit']);
+export type StepType = z.infer<typeof StepTypeSchema>;
 
-// All spec-grade node fields optional except id/type/label — except exit
-// nodes, whose label is optional (KB example: { id, type: "exit", port }) and
+// All spec-grade step fields optional except id/type/label — except exit
+// steps, whose label is optional (KB example: { id, type: "exit", port }) and
 // whose port is required.
-export const NodeSchema = z
+export const StepSchema = z
   .strictObject({
     id: z.string().min(1),
-    type: NodeTypeSchema,
+    type: StepTypeSchema,
     label: z.string().min(1).optional(),
     note: z.string().optional(),
     refs: z.array(z.string()).optional(),
@@ -31,17 +31,17 @@ export const NodeSchema = z
     ui: z.string().optional(),
     journey: z.string().optional(), // sub-flow: separate journey file, never inlined
     with: z.record(z.string(), z.unknown()).optional(), // args passed into sub-journey
-    port: z.string().optional(), // exit nodes: which declared exit this is
+    port: z.string().optional(), // exit steps: which declared exit this is
   })
   .superRefine((n, ctx) => {
     if (n.type === 'exit' && !n.port) {
-      ctx.addIssue({ code: 'custom', path: ['port'], message: 'exit node requires a port' });
+      ctx.addIssue({ code: 'custom', path: ['port'], message: 'exit step requires a port' });
     }
     if (n.type !== 'exit' && !n.label) {
-      ctx.addIssue({ code: 'custom', path: ['label'], message: 'node requires a label' });
+      ctx.addIssue({ code: 'custom', path: ['label'], message: 'step requires a label' });
     }
   });
-export type Node = z.infer<typeof NodeSchema>;
+export type Step = z.infer<typeof StepSchema>;
 
 export const EdgeSchema = z.strictObject({
   from: z.string(),
@@ -73,7 +73,7 @@ export const JourneySchema = z.strictObject({
   nonGoals: z.array(z.string()).optional(),
   entries: z.array(z.string()).default([]),
   exits: z.array(z.string()).default([]),
-  nodes: z.array(NodeSchema),
+  steps: z.array(StepSchema),
   edges: z.array(EdgeSchema).default([]),
   links: z.array(LinkSchema).default([]),
 });
@@ -96,7 +96,7 @@ export const ManifestSchema = z.strictObject({
 });
 export type Manifest = z.infer<typeof ManifestSchema>;
 
-// Annotations layer: reviewers drop change-notes against journeys/nodes in the
+// Annotations layer: reviewers drop change-notes against journeys/steps in the
 // viewer; agents read them, apply the change, flip them applied. Notes ALWAYS
 // live in the sidecar `.codestory/notes.json`, never inside journey files.
 export const NoteStatusSchema = z.enum(['open', 'applied']);
@@ -105,7 +105,7 @@ export type NoteStatus = z.infer<typeof NoteStatusSchema>;
 export const NoteSchema = z.strictObject({
   id: z.string().min(1),
   journey: z.string().min(1), // must reference an existing journey id (base or variant)
-  node: z.string().min(1).optional(), // if set, must exist on that journey
+  step: z.string().min(1).optional(), // if set, must exist on that journey
   text: z.string().min(1),
   status: NoteStatusSchema.default('open'),
   createdAt: z.string(), // ISO 8601

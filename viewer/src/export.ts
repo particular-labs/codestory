@@ -1,6 +1,6 @@
 // PNG export composition. The live canvas has no header, no background grid, and
 // scrolls — so a raw capture is off-centre and bare (see the user's report). This
-// module measures the true node bounding box, clones the canvas into an off-screen
+// module measures the true step bounding box, clones the canvas into an off-screen
 // wrapper with symmetric padding + optional header/background/legend, and rasterizes
 // that. Pure summary/opts logic lives in ./export-meta (unit-tested); this file is
 // the thin DOM adapter.
@@ -10,14 +10,14 @@ import type { ExportMeta, ExportOpts } from './export-meta';
 export * from './export-meta';
 
 const PAD = 46; // outer frame padding — the "centralized" breathing room
-const MARGIN = 38; // inner slack around the node bbox (covers curved edges + label chips)
+const MARGIN = 38; // inner slack around the step bbox (covers curved edges + label chips)
 
-/** Union bounding box of the canvas's export-node elements, in canvas-local px.
+/** Union bounding box of the canvas's export-step elements, in canvas-local px.
  *  Edges are excluded (they span the full canvas and would defeat the crop). */
 function contentBox(canvas: HTMLElement, includeGhosts: boolean): { x: number; y: number; w: number; h: number } {
   const cb = canvas.getBoundingClientRect();
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const el of canvas.querySelectorAll<HTMLElement>('[data-export-node]')) {
+  for (const el of canvas.querySelectorAll<HTMLElement>('[data-export-step]')) {
     if (!includeGhosts && el.hasAttribute('data-ghost')) continue;
     const r = el.getBoundingClientRect();
     minX = Math.min(minX, r.left - cb.left);
