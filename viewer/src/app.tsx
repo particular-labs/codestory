@@ -3,7 +3,8 @@ import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type 
 import { frameOffset } from './frame';
 import { activePrefix, deriveGraph, type Graph, unionOf } from './graph';
 import { Ic } from './icons';
-import { loadSettings, saveSettings } from './settings';
+import { loadSettings } from './settings';
+import { createAppStore, type AppInit, type AppState, type AppStore, type AppStoreApi } from './store';
 import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlState';
 
 // ── API projection (viewer-local; SSOT is src/schema.ts, this is read-only) ──
@@ -273,34 +274,10 @@ const PATH_SEP = '\u0000'; // rail-tree path separator — no filesystem allows 
 const GLYPHS: Record<string, string> = { step: '', decision: '◇ ', subflow: '▤ ', exit: '⚑ ' };
 const TYPE_TEXT: Record<string, string> = { step: 'STEP', decision: 'DECISION', subflow: 'SUB-FLOW', exit: 'EXIT' };
 
-interface StackEntry { id: string; callerJourney?: string; callerNode?: string }
+export interface StackEntry { id: string; callerJourney?: string; callerNode?: string }
 
-interface AppState {
-  data: ApiData; // stateful so SSE live-reload can swap in fresh journeys/notes
-  theme: 'dark' | 'light';
-  view: 'map' | 'journey';
-  stack: StackEntry[];
-  selectedStepId: string | null;
-  persona: string | null;
-  query: string;
-  detailOpen: boolean;
-  stepPos: Record<string, { x: number; y: number }>;
-  mapPos: Record<string, { x: number; y: number }>;
-  variantSel: Record<string, string>; // base journey id → selected version's journey id
-  flow: 'horizontal' | 'vertical'; // SSOT for flow direction — every layout/edge/port reads this
-  notesOpen: boolean; // notes hub popover open — doubles as annotate mode (click a step to leave a change-note)
-  railOpen: Record<string, boolean>; // rail sub-flow tree: path → expanded (collapsed by default)
-  notePopover: { journey: string; step: string } | null; // open note editor
-  noteDraft: string;
-  promptText: string | null; // clipboard fallback overlay
-  copied: boolean;
-  isNarrow: boolean; // phone viewport (matchMedia SSOT) — drives responsive layout
-  versionsOpen: boolean; // narrow only: version picker expanded from its pill
-  drawerOpen: boolean; // narrow-only: left rail overlay drawer open
-  exportOpen: boolean; // export-options popover open
-  exportOpts: ExportOpts; // what to bake into the PNG (all on by default)
-  linkCopied: boolean; // transient: "copy link to this view" feedback
-}
+// AppState (the 24 fields) + all actions now live in the zustand vanilla store
+// (./store, SSOT). The App holds a per-instance store and reads it via `this.s`.
 
 const stepKind = (n: ApiStep) => (n.journey ? 'subflow' : n.type);
 const stepTitle = (n: ApiStep) => n.label ?? n.port ?? n.id;
@@ -322,7 +299,14 @@ const portsSummary = (b: ApiJourney) =>
 const locOf = (s: AppState): Loc => relevantLoc({ journeys: s.stack.map((e) => e.id), step: s.selectedStepId, persona: s.persona, variants: s.variantSel });
 
 
-export class App extends React.Component<AppProps, AppState> {
+export class App extends React.Component<AppProps> {
+  // per-instance zustand vanilla store (SSOT for the 24 state fields). Created here,
+  // NOT a module singleton — parity mounts App several times with different props.
+  private store: AppStoreApi;
+  private _unsub: (() => void) | null = null;
+  /** Read the current store state + actions (replaces every old `this.state`). */
+  private get s(): AppStore { return this.store.getState(); }
+
   constructor(props: AppProps) {
     super(props);
     const isNarrow = narrowMql()?.matches ?? false;
@@ -333,7 +317,8 @@ export class App extends React.Component<AppProps, AppState> {
     const loc = parseLocation(window.location.search);
     this._initialLoc = loc;
     const exportOpts = { ...DEFAULT_EXPORT_OPTS, ...(loadSettings().exportOpts ?? {}) };
-    this.state = { data: props.data, theme: props.defaultTheme, view: loc.journeys.length ? 'journey' : 'map', stack: loc.journeys.map((id) => ({ id })), selectedStepId: loc.step, persona: loc.persona, query: '', detailOpen: !isNarrow, stepPos: {}, mapPos: {}, variantSel: loc.variants, flow, notesOpen: false, railOpen: {}, notePopover: null, noteDraft: '', promptText: null, copied: false, isNarrow, drawerOpen: false, versionsOpen: false, exportOpen: false, exportOpts, linkCopied: false };
+    const init: AppInit = { data: props.data, theme: props.defaultTheme, flow, isNarrow, loc, exportOpts };
+    this.store = createAppStore(init); // seeds the raw two-phase state (cDM validates)
   }
 
   private _initialLoc: Loc;
@@ -345,11 +330,14 @@ export class App extends React.Component<AppProps, AppState> {
   private _mql: MediaQueryList | null = null;
   // one place updates isNarrow; a narrow→wide change also closes the drawer so it
   // can't linger as a stuck overlay when the rail returns inline
-  private _onNarrow = (e: MediaQueryListEvent) => this.setState({ isNarrow: e.matches, drawerOpen: e.matches && this.state.drawerOpen });
+  private _onNarrow = (e: MediaQueryListEvent) => this.s.setNarrow(e.matches);
 
   // ── live reload: SSE tells us .codestory/ changed → refetch + re-render, keeping
   //    the current view/stack/selection wherever those ids still exist ──
   componentDidMount() {
+    // subscribe first so the restore below (and every later action) re-renders; the
+    // store's prev/next lets us drive the URL sync (old componentDidUpdate) here.
+    this._unsub = this.store.subscribe((state, prev) => { this._syncUrl(state, prev); this.forceUpdate(); });
     try {
       const es = new EventSource('/api/events');
       es.addEventListener('reload', () => { void this.refetch(); });
@@ -362,23 +350,24 @@ export class App extends React.Component<AppProps, AppState> {
     if (l.journeys.length || l.step || l.persona || Object.keys(l.variants).length) { this._restoring = true; this.restoreLocation(l); }
     window.addEventListener('popstate', this._onPopState);
   }
-  componentWillUnmount() { this._es?.close(); this._mql?.removeEventListener('change', this._onNarrow); window.removeEventListener('popstate', this._onPopState); }
+  componentWillUnmount() { this._unsub?.(); this._es?.close(); this._mql?.removeEventListener('change', this._onNarrow); window.removeEventListener('popstate', this._onPopState); }
 
   // ── location ↔ URL sync (SSOT: state drives the URL; back/forward drives state) ──
   private _onPopState = () => { this._restoring = true; this.restoreLocation(parseLocation(window.location.search)); };
 
   /** Reflect location-bearing state into the URL after it changes: pushState on a
    *  journey-path move (so back/forward walks hops), replaceState for step/persona/
-   *  variant tweaks (so history isn't flooded). Skips the echo from a restore. */
-  componentDidUpdate(_prev: AppProps, prevState: AppState) {
+   *  variant tweaks (so history isn't flooded). Skips the echo from a restore.
+   *  Runs on every store change (subscribe) with the store's prev/next snapshots. */
+  private _syncUrl(state: AppState, prevState: AppState) {
     if (this._restoring) { this._restoring = false; return; }
-    const next = serializeLocation(locOf(this.state));
+    const next = serializeLocation(locOf(state));
     if (next === serializeLocation(locOf(prevState))) return;
-    const pathMoved = prevState.stack.map((e) => e.id).join('~') !== this.state.stack.map((e) => e.id).join('~');
+    const pathMoved = prevState.stack.map((e) => e.id).join('~') !== state.stack.map((e) => e.id).join('~');
     window.history[pathMoved ? 'pushState' : 'replaceState']({}, '', next ? `?${next}` : window.location.pathname);
   }
 
-  closeDrawer = () => this.setState({ drawerOpen: false });
+  closeDrawer = () => this.s.closeDrawer();
 
   async refetch() {
     try {
@@ -387,23 +376,12 @@ export class App extends React.Component<AppProps, AppState> {
       const data = (await res.json()) as ApiData;
       this._d = null; // journey set may have changed → drop derived-graph + layout caches
       this._lay = {};
-      this.setState((s) => {
-        const byId = new Map(data.journeys.map((b) => [b.id, b]));
-        const stack = s.stack.filter((e) => byId.has(e.id));
-        let selectedStepId = s.selectedStepId;
-        const top = stack[stack.length - 1];
-        if (top) {
-          const selVar = s.variantSel[top.id];
-          const journey = byId.get(selVar && byId.has(selVar) ? selVar : top.id);
-          if (!journey?.steps.some((n) => n.id === selectedStepId)) selectedStepId = journey?.steps[0]?.id ?? null;
-        }
-        return { data, stack, selectedStepId, view: stack.length ? s.view : 'map' };
-      });
+      this.s.applyRefetch(data);
     } catch { /* network blip — keep showing current data */ }
   }
 
   // ── notes (annotations) ──
-  allNotes() { return this.state.data.notes ?? []; }
+  allNotes() { return this.s.data.notes ?? []; }
   openNotes() { return this.allNotes().filter((n) => n.status === 'open'); }
   openNotesFor(journey: string, step: string) { return this.allNotes().filter((n) => n.journey === journey && n.step === step && n.status === 'open'); }
 
@@ -417,14 +395,14 @@ export class App extends React.Component<AppProps, AppState> {
   async saveNote(journey: string, step: string, text: string) {
     if (!text.trim()) return;
     const ok = await this.postNote({ journey, step, text: text.trim() });
-    if (ok) this.setState({ notePopover: null, noteDraft: '' });
+    if (ok) this.s.cancelNote();
   }
   applyNote(id: string) { void this.postNote({ id, status: 'applied' }); }
   deleteNote(id: string) { void this.postNote({ id, delete: true }); }
   clearNotes() { void this.postNote({ clear: true }); }
   goToNote(n: { journey: string; step?: string }) {
     this.enterJourney(n.journey);
-    if (n.step) this.setState({ selectedStepId: n.step });
+    if (n.step) this.s.selectNode(n.step);
   }
 
   /** Serialize every open note + its step context into an LLM-ready markdown block. */
@@ -458,16 +436,16 @@ export class App extends React.Component<AppProps, AppState> {
     const text = this.buildPrompt();
     try {
       await navigator.clipboard.writeText(text);
-      this.setState({ copied: true });
-      setTimeout(() => this.setState({ copied: false }), 1500);
+      this.s.setCopied(true);
+      setTimeout(() => this.s.setCopied(false), 1500);
     } catch {
-      this.setState({ promptText: text }); // fallback: show a selectable textarea
+      this.s.setPrompt(text); // fallback: show a selectable textarea
     }
   }
 
   d() {
     if (this._d) return this._d;
-    return (this._d = deriveGraph(this.state.data));
+    return (this._d = deriveGraph(this.s.data));
   }
 
   layout(key: string, boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout {
@@ -476,87 +454,42 @@ export class App extends React.Component<AppProps, AppState> {
     return this._lay[k]!;
   }
 
-  // ── navigation ──
+  // ── navigation (read helpers on the class; mutations delegate to the store) ──
 
-  curEntry() { return this.state.stack[this.state.stack.length - 1] ?? null; }
+  curEntry() { return this.s.stack[this.s.stack.length - 1] ?? null; }
   /** The displayed journey: the selected variant of the stacked base id, else the base. */
   curJourney() {
     const e = this.curEntry();
     if (!e) return null;
-    const sel = this.state.variantSel[e.id];
+    const sel = this.s.variantSel[e.id];
     return this.d().byId.get(sel ?? e.id) ?? null;
   }
-  setVariant(baseId: string, journeyId: string) {
-    // versionsOpen: on phones the picker collapses back to its pill after a choice
-    this.setState((s) => ({ variantSel: { ...s.variantSel, [baseId]: journeyId }, selectedStepId: this.firstStep(journeyId), versionsOpen: false }));
-  }
+  setVariant(baseId: string, journeyId: string) { this.s.setVariant(baseId, journeyId); }
   /** The journey id actually displayed for a base id (its selected variant, else itself). */
-  displayedId(baseId: string) { return this.state.variantSel[baseId] ?? baseId; }
+  displayedId(baseId: string) { return this.s.variantSel[baseId] ?? baseId; }
   steps() { return this.curJourney()?.steps ?? []; }
-  selIndex() { return this.steps().findIndex((n) => n.id === this.state.selectedStepId); }
-  firstStep(id: string) { return this.d().byId.get(id)?.steps[0]?.id ?? null; }
+  selIndex() { return this.steps().findIndex((n) => n.id === this.s.selectedStepId); }
 
-  enterJourney(id: string) { this.setState({ view: 'journey', stack: [{ id }], selectedStepId: this.firstStep(this.displayedId(id)) }); }
-  /** Rebuild the enriched call stack (caller journey + step per hop) from a bare id
-   *  chain. `displayed` resolves a base id to its shown variant — passed in so a
-   *  restore can honour URL variants before variantSel is committed to state. */
-  buildStack(ids: string[], displayed: (id: string) => string): StackEntry[] {
-    const d = this.d();
-    const stack: StackEntry[] = [];
-    ids.forEach((id, i) => {
-      if (i === 0) { stack.push({ id }); return; }
-      const parent = ids[i - 1]!;
-      const callerNode = d.byId.get(displayed(parent))?.steps.find((n) => n.journey === id)?.id;
-      stack.push({ id, callerJourney: parent, ...(callerNode ? { callerNode } : {}) });
-    });
-    return stack;
-  }
+  enterJourney(id: string) { this.s.enterJourney(id); }
   /** Enter a nested journey with its full caller chain (rail tree click) so
    *  breadcrumbs, Return chips, and the persona lens see the real call stack. */
-  enterPath(ids: string[]) {
-    const stack = this.buildStack(ids, (id) => this.displayedId(id));
-    const last = ids[ids.length - 1]!;
-    this.setState({ view: 'journey', stack, selectedStepId: this.firstStep(this.displayedId(last)) });
-  }
+  enterPath(ids: string[]) { this.s.enterPath(ids); }
   /** Apply a decoded location (URL / back-forward), trimming ids that no longer
    *  exist so a stale or shared link degrades gracefully instead of showing nothing. */
-  restoreLocation(loc: Loc) {
-    const d = this.d();
-    const path: string[] = [];
-    for (const id of loc.journeys) { if (d.byId.has(id)) path.push(id); else break; } // longest valid prefix
-    const variants: Record<string, string> = {};
-    for (const [base, sel] of Object.entries(loc.variants)) if (d.byId.has(sel)) variants[base] = sel;
-    const displayed = (id: string) => variants[id] ?? id;
-    const persona = loc.persona && d.personas.some((p) => p.id === loc.persona) ? loc.persona : null;
-    if (path.length === 0) { this.setState({ view: 'map', stack: [], selectedStepId: null, persona, variantSel: variants }); return; }
-    const last = path[path.length - 1]!;
-    const lastSteps = d.byId.get(displayed(last))?.steps ?? [];
-    const step = loc.step && lastSteps.some((n) => n.id === loc.step) ? loc.step : this.firstStep(displayed(last));
-    this.setState({ view: 'journey', stack: this.buildStack(path, displayed), variantSel: variants, persona, selectedStepId: step });
-  }
-  stepInto(subId: string, callerNode: string) {
-    const cur = this.curEntry();
-    if (!cur) return;
-    this.setState((s) => ({ stack: [...s.stack, { id: subId, callerJourney: cur.id, callerNode }], selectedStepId: this.firstStep(this.displayedId(subId)) }));
-  }
-  goCrumb(k: number) {
-    if (k === 0) { this.setState({ view: 'map', stack: [], selectedStepId: null, persona: null }); return; } // Root = whole map, no lens/journey (clears the stack so the URL doesn't keep the old journey)
-    this.setState((s) => {
-      const st = s.stack.slice(0, k);
-      return { stack: st, selectedStepId: this.firstStep(this.displayedId(st[st.length - 1]!.id)) };
-    });
-  }
-  selectNode(id: string) { this.setState({ selectedStepId: id }); }
-  setPersona(id: string) { this.setState((s) => ({ persona: s.persona === id ? null : id })); }
-  toggleTheme() { this.setState((s) => { const theme = s.theme === 'dark' ? 'light' : 'dark' as const; saveSettings({ theme }); return { theme }; }); }
+  restoreLocation(loc: Loc) { this.s.restoreLocation(loc); }
+  stepInto(subId: string, callerNode: string) { this.s.stepInto(subId, callerNode); }
+  goCrumb(k: number) { this.s.goCrumb(k); }
+  selectNode(id: string) { this.s.selectNode(id); }
+  setPersona(id: string) { this.s.togglePersona(id); }
+  toggleTheme() { this.s.toggleTheme(); }
   /** Copy a link to the exact current view (URL already encodes the location). */
   async copyLink() {
     try {
       await navigator.clipboard.writeText(window.location.href);
-      this.setState({ linkCopied: true });
-      window.setTimeout(() => this.setState({ linkCopied: false }), 1400);
+      this.s.setLinkCopied(true);
+      window.setTimeout(() => this.s.setLinkCopied(false), 1400);
     } catch {
-      this.setState({ promptText: window.location.href }); // clipboard blocked → manual-copy overlay
+      this.s.setPrompt(window.location.href); // clipboard blocked → manual-copy overlay
     }
   }
 
@@ -567,7 +500,7 @@ export class App extends React.Component<AppProps, AppState> {
   async exportPng() {
     const el = this.canvasEl.current;
     if (!el) return;
-    const vars: Record<string, string> = { ...THEMES[this.state.theme], accent: this.props.accent || THEMES[this.state.theme].accent };
+    const vars: Record<string, string> = { ...THEMES[this.s.theme], accent: this.props.accent || THEMES[this.s.theme].accent };
     const journey = this.curJourney();
     const project = this.props.data.manifest?.project ?? 'codestory';
     const flowName = journey
@@ -576,7 +509,7 @@ export class App extends React.Component<AppProps, AppState> {
     const meta = journey
       ? { title: flowName, subtitle: portsSummary(journey), legend: summarize(journey.steps) }
       : { title: `${project} — Root`, subtitle: `${this.d().order.length} journeys · ${this.props.data.manifest?.personas?.length ?? 0} personas`, legend: `${this.d().order.length} journeys` };
-    const dataUrl = await composeExportPng(el, vars, meta, this.state.exportOpts);
+    const dataUrl = await composeExportPng(el, vars, meta, this.s.exportOpts);
     const a = document.createElement('a');
     a.href = dataUrl;
     // every file leads with the app name, then the flow, then the date: "<app> — <flow> - DD-MM-YYYY.png"
@@ -585,9 +518,9 @@ export class App extends React.Component<AppProps, AppState> {
     const date = `${p2(n.getDate())}-${p2(n.getMonth() + 1)}-${n.getFullYear()}`;
     a.download = `${`${project} — ${flowName} - ${date}`.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
     a.click();
-    this.setState({ exportOpen: false });
+    this.s.closeExport();
   }
-  toggleFlow() { this.setState((s) => { const flow = s.flow === 'vertical' ? 'horizontal' : 'vertical' as const; saveSettings({ flow }); return { flow }; }); }
+  toggleFlow() { this.s.toggleFlow(); }
 
   step(dir: number) {
     const ns = this.steps();
@@ -595,19 +528,11 @@ export class App extends React.Component<AppProps, AppState> {
     let i = this.selIndex();
     if (i < 0) i = 0;
     const ni = Math.max(0, Math.min(ns.length - 1, i + dir));
-    this.setState({ selectedStepId: ns[ni]!.id });
+    this.s.selectNode(ns[ni]!.id);
   }
-  hop(nextId: string) { this.setState({ stack: [{ id: nextId }], selectedStepId: this.firstStep(this.displayedId(nextId)) }); }
+  hop(nextId: string) { this.s.hop(nextId); }
 
-  returnToParent() {
-    const e = this.curEntry();
-    if (!e?.callerJourney || !e.callerNode) return;
-    // resolve the return edge against the parent's DISPLAYED version — a
-    // selected variant may route the caller step differently than the base
-    const parent = this.d().byId.get(this.displayedId(e.callerJourney));
-    const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
-    this.setState((s) => ({ stack: s.stack.slice(0, -1), selectedStepId: returnEdge?.to ?? e.callerNode ?? null }));
-  }
+  returnToParent() { this.s.returnToParent(); }
 
   continueTarget(): { label: string; onClick: () => void } | null {
     const ns = this.steps();
@@ -647,8 +572,8 @@ export class App extends React.Component<AppProps, AppState> {
       // no lower clamp — a step must be draggable left/up too, not pinned at the
       // canvas origin (the old Math.max(0,…) stopped any leftward move dead at x=0)
       const p = { x: baseX + dx, y: baseY + dy };
-      if (kind === 'map') this.setState((s) => ({ mapPos: { ...s.mapPos, [key]: p } }));
-      else this.setState((s) => ({ stepPos: { ...s.stepPos, [key]: p } }));
+      if (kind === 'map') this.s.setMapPos(key, p);
+      else this.s.setStepPos(key, p);
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
@@ -661,7 +586,7 @@ export class App extends React.Component<AppProps, AppState> {
       this.selectNode(id);
       // notes hub open = annotate mode: a click also opens the note editor for this step
       const journey = this.curJourney();
-      if (this.state.notesOpen && journey) this.setState({ notePopover: { journey: journey.id, step: id }, noteDraft: '' });
+      if (this.s.notesOpen && journey) this.s.openNotePopover(journey.id, id);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -671,20 +596,20 @@ export class App extends React.Component<AppProps, AppState> {
   // ── render ──
 
   render() {
-    const t: Record<string, string> = { ...THEMES[this.state.theme], accent: this.props.accent || THEMES[this.state.theme].accent };
+    const t: Record<string, string> = { ...THEMES[this.s.theme], accent: this.props.accent || THEMES[this.s.theme].accent };
     const rootStyle: Record<string, string> = {};
     Object.keys(t).forEach((k) => { rootStyle['--' + k] = t[k]!; });
     Object.assign(rootStyle, css("background:var(--bg);color:var(--fg);height:100vh;width:100%;display:flex;flex-direction:column;overflow:hidden;position:relative;font-size:14px;") as Record<string, string>, { fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif', WebkitFontSmoothing: 'antialiased' });
 
     const d = this.d();
-    const isMap = this.state.view === 'map';
-    const isJourney = this.state.view === 'journey';
-    const vertical = this.state.flow === 'vertical';
-    const { isNarrow, drawerOpen } = this.state;
-    const topJourneyId = this.state.stack[0]?.id ?? null;
-    const persona = this.state.persona ? d.personas.find((j) => j.id === this.state.persona) ?? null : null;
+    const isMap = this.s.view === 'map';
+    const isJourney = this.s.view === 'journey';
+    const vertical = this.s.flow === 'vertical';
+    const { isNarrow, drawerOpen } = this.s;
+    const topJourneyId = this.s.stack[0]?.id ?? null;
+    const persona = this.s.persona ? d.personas.find((j) => j.id === this.s.persona) ?? null : null;
     const personaSet = persona ? new Set(persona.journeys) : null;
-    const q = this.state.query.trim().toLowerCase();
+    const q = this.s.query.trim().toLowerCase();
 
     // chain map
     const chainLayout = this.layout('__chain', d.order.map((id) => ({ id, w: CARD_W, h: CARD_H })), d.chainEdges.map((e) => [e[0], e[1]] as [string, string]), vertical, { main: vertical ? 80 : 106, cross: vertical ? 66 : 50 });
@@ -697,7 +622,7 @@ export class App extends React.Component<AppProps, AppState> {
       const built = b.steps.filter((n) => n.status === 'built').length;
       const mkey = (vertical ? 'v' : 'h') + ':' + id;
       const base = chainLayout.pos[id] ?? { x: 32, y: 32 };
-      const mp = this.state.mapPos[mkey];
+      const mp = this.s.mapPos[mkey];
       const px = mp?.x ?? base.x, py = mp?.y ?? base.y;
       mapRects[id] = { x: px, y: py, w: CARD_W, h: CARD_H };
       const portStyle = (edge: 'left' | 'right' | 'top' | 'bottom'): React.CSSProperties => ({
@@ -727,7 +652,7 @@ export class App extends React.Component<AppProps, AppState> {
 
     // personas rail
     const personaList = d.personas.map((j) => {
-      const active = this.state.persona === j.id;
+      const active = this.s.persona === j.id;
       return {
         id: j.id, label: j.title, count: `${j.journeys.length}/${d.order.length}`,
         onClick: () => this.setPersona(j.id),
@@ -760,13 +685,13 @@ export class App extends React.Component<AppProps, AppState> {
       const b = d.byId.get(id);
       if (!b) return null;
       const subs = (d.subsByJourney.get(id) ?? []).filter((s) => !visited.has(s));
-      const open = this.state.railOpen[path] ?? true; // expanded by default — visible sub-flows are what makes the rail self-explanatory
+      const open = this.s.railOpen[path] ?? true; // expanded by default — visible sub-flows are what makes the rail self-explanatory
       const active = this.curEntry()?.id === id; // highlight the journey being viewed, not the stack root
       return (
         <div key={path} style={css('display:flex;flex-direction:column;gap:2px;')}>
           <div style={css('display:flex;align-items:center;gap:0;')}>
             <button
-              onClick={() => this.setState((s) => ({ railOpen: { ...s.railOpen, [path]: !open } }))}
+              onClick={() => this.s.toggleRail(path)}
               data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
               style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
             >{open ? <Ic n="chevron-down" size={14} /> : <Ic n="chevron-right" size={14} />}</button>
@@ -816,7 +741,7 @@ export class App extends React.Component<AppProps, AppState> {
     const eff = (n: ApiStep) => {
       const base = lay?.pos[n.id] ?? { x: 32, y: 28 };
       const key = `${journeyId}:${vertical ? 'v' : 'h'}:${n.id}`;
-      const o = this.state.stepPos[key];
+      const o = this.s.stepPos[key];
       return { x: o?.x ?? base.x, y: o?.y ?? base.y, key };
     };
     const journeyRects: Record<string, Rect> = {};
@@ -841,7 +766,7 @@ export class App extends React.Component<AppProps, AppState> {
     const ghostEdges: EdgeTuple[] = hasVariants ? unionEdges.filter(([a, b]) => !activeEdgeKeys.has(`${a}>${b}`)) : [];
 
     const journeySteps = ns.map((n) => {
-      const isSel = n.id === this.state.selectedStepId;
+      const isSel = n.id === this.s.selectedStepId;
       const kind = stepKind(n);
       const p = eff(n);
       const status = n.status ?? 'planned';
@@ -858,14 +783,14 @@ export class App extends React.Component<AppProps, AppState> {
     const baseW = vertical ? (lay?.w ?? 480) : Math.max(lay?.w ?? 480, 480);
     const journeyDims = lay ? { w: Math.max(baseW, jf.w), h: Math.max(360, jf.h) } : { w: 480, h: 360 };
     const journeyEdgeTuples: EdgeTuple[] = (journey?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
-    const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.state.selectedStepId, (id) => this.selectNode(id), vertical) : null;
+    const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.s.selectedStepId, (id) => this.selectNode(id), vertical) : null;
 
     // crumbs
     const crumbBtn = (last: boolean): React.CSSProperties => ({ border: 'none', background: 'none', padding: '3px 6px', borderRadius: 5, color: last ? 'var(--fg)' : 'var(--dim)', fontWeight: last ? 600 : 500, fontSize: 12.5, cursor: last ? 'default' : 'pointer' });
     const crumbs: Array<{ label: string; onClick: () => void; style: React.CSSProperties }> = [{ label: ROOT_LABEL, onClick: () => this.goCrumb(0), style: crumbBtn(false) }];
     const crumbSep = (): React.CSSProperties => ({ border: 'none', background: 'none', color: 'var(--mute)', fontSize: 12, padding: '0 1px', cursor: 'default' });
-    const stackLen = this.state.stack.length;
-    this.state.stack.forEach((entry, i) => {
+    const stackLen = this.s.stack.length;
+    this.s.stack.forEach((entry, i) => {
       const last = i === stackLen - 1;
       // narrow: collapse the middle of a deep path to a single "…" (up one level)
       // so a long call stack never widens the header past the viewport
@@ -892,7 +817,7 @@ export class App extends React.Component<AppProps, AppState> {
     const selStatus = selNode?.status ?? 'planned';
     // honest rule: criteria read as verified only when the step is built (has tests)
     const chk = (_i: number) => selStatus === 'built';
-    const detailShown = isJourney && !!selNode && this.state.detailOpen;
+    const detailShown = isJourney && !!selNode && this.s.detailOpen;
     const lensBlocked = isJourney && !!personaSet && !!topJourneyId && !personaSet.has(topJourneyId);
     // left rail: inline 220px column normally; on narrow it's an overlay drawer
     // (absolute within the content row) that slides in over a tap-to-close backdrop
@@ -904,23 +829,23 @@ export class App extends React.Component<AppProps, AppState> {
       <div style={rootStyle as React.CSSProperties}>
         <div style={{ ...css('height:52px;flex:0 0 auto;display:flex;align-items:center;border-bottom:1px solid var(--border);background:var(--surface);z-index:20;'), gap: isNarrow ? 8 : 16, padding: isNarrow ? '0 10px' : '0 16px' }}>
           {isNarrow && (
-            <button data-tip="Menu" data-tip-align="left" onClick={() => this.setState((s) => ({ drawerOpen: !s.drawerOpen }))} style={css('width:30px;height:30px;flex:0 0 auto;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:15px;display:flex;align-items:center;justify-content:center;')}><Ic n="menu" size={17} /></button>
+            <button data-tip="Menu" data-tip-align="left" onClick={() => this.s.toggleDrawer()} style={css('width:30px;height:30px;flex:0 0 auto;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:15px;display:flex;align-items:center;justify-content:center;')}><Ic n="menu" size={17} /></button>
           )}
           <div style={{ ...css('display:flex;align-items:center;gap:9px;'), flex: '0 0 auto' }}>
             <div style={css('width:15px;height:15px;border-radius:4px;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft);')}></div>
             <span style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>codestory</span>
             {!isNarrow && (
-              <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.state.data.manifest?.project ?? 'codestory present'}</span>
+              <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.s.data.manifest?.project ?? 'codestory present'}</span>
             )}
-            {!isNarrow && (this.state.data.issues?.length ?? 0) > 0 && (
-              <span title={this.state.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.state.data.issues!.length} validate issue(s) — journeys may be missing</span>
+            {!isNarrow && (this.s.data.issues?.length ?? 0) > 0 && (
+              <span title={this.s.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.s.data.issues!.length} validate issue(s) — journeys may be missing</span>
             )}
           </div>
 
           <div style={css('flex:1 1 auto;min-width:0;display:flex;justify-content:center;overflow:hidden;')}>
             {isMap && (
               <div style={{ ...css('position:relative;'), width: isNarrow ? '100%' : 320, maxWidth: isNarrow ? '100%' : '42vw' }}>
-                <input value={this.state.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Search journeys & steps" style={{ ...css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;outline:none;'), fontSize: isNarrow ? 16 : 12.5 }} />
+                <input value={this.s.query} onChange={(e) => this.s.setQuery(e.target.value)} placeholder="Search journeys & steps" style={{ ...css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;outline:none;'), fontSize: isNarrow ? 16 : 12.5 }} />
                 <span style={css('position:absolute;left:9px;top:7px;color:var(--mute);font-size:13px;')}>⌕</span>
               </div>
             )}
@@ -939,20 +864,20 @@ export class App extends React.Component<AppProps, AppState> {
                 <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
               </div>
             )}
-            <button data-tip={this.state.notesOpen ? 'Notes hub open — click a step to note it' : 'Notes — annotate steps, copy as prompt'} onClick={() => this.setState((s) => ({ notesOpen: !s.notesOpen, notePopover: null }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <button data-tip={this.s.notesOpen ? 'Notes hub open — click a step to note it' : 'Notes — annotate steps, copy as prompt'} onClick={() => this.s.toggleNotes()} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.s.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.s.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.s.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Ic n="pencil" size={15} />
               {this.openNotes().length > 0 && (
                 <span style={css("position:absolute;top:-5px;right:-5px;min-width:14px;height:14px;border-radius:7px;background:var(--accent);color:var(--accentFg);font-size:9px;font-weight:700;line-height:14px;text-align:center;padding:0 3px;font-family:'JetBrains Mono',monospace;")}>{this.openNotes().length}</span>
               )}
             </button>
             <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? <Ic n="arrows-ud" size={15} /> : <Ic n="arrows-lr" size={15} />}</button>
-            <button data-tip={this.state.linkCopied ? 'Link copied' : 'Copy link to this view'} onClick={() => void this.copyLink()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n={this.state.linkCopied ? 'check' : 'link'} size={15} /></button>
-            <button data-tip="Export view as PNG" onClick={() => this.setState((s) => ({ exportOpen: !s.exportOpen, notesOpen: false }))} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.state.exportOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.state.exportOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.state.exportOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic n="download" size={15} /></button>
-            <button data-tip={this.state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.state.theme === 'dark' ? <Ic n="sun" size={15} /> : <Ic n="moon" size={15} />}</button>
+            <button data-tip={this.s.linkCopied ? 'Link copied' : 'Copy link to this view'} onClick={() => void this.copyLink()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n={this.s.linkCopied ? 'check' : 'link'} size={15} /></button>
+            <button data-tip="Export view as PNG" onClick={() => this.s.toggleExport()} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.s.exportOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.s.exportOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.s.exportOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic n="download" size={15} /></button>
+            <button data-tip={this.s.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.s.theme === 'dark' ? <Ic n="sun" size={15} /> : <Ic n="moon" size={15} />}</button>
           </div>
         </div>
 
-        {this.state.notesOpen && (
+        {this.s.notesOpen && (
           <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 340, maxHeight: isNarrow ? '60vh' : '70vh' }}>
             <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
               <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Notes</div>
@@ -986,7 +911,7 @@ export class App extends React.Component<AppProps, AppState> {
             {this.allNotes().length > 0 && (
               <div style={css('padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;')}>
                 {this.openNotes().length > 0 && (
-                  <button onClick={() => void this.copyPrompt()} style={css('flex:1 1 auto;height:30px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:11.5px;font-weight:600;cursor:pointer;')}>{this.state.copied ? '✓ Copied' : `⧉ Copy ${this.openNotes().length} as prompt`}</button>
+                  <button onClick={() => void this.copyPrompt()} style={css('flex:1 1 auto;height:30px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:11.5px;font-weight:600;cursor:pointer;')}>{this.s.copied ? '✓ Copied' : `⧉ Copy ${this.openNotes().length} as prompt`}</button>
                 )}
                 <button onClick={() => this.clearNotes()} title="Delete all notes" style={css('flex:0 0 auto;height:30px;padding:0 11px;border-radius:7px;border:1px solid var(--borderStrong);background:var(--inset);color:var(--dim);font-size:11.5px;font-weight:600;cursor:pointer;')}>Clear all</button>
               </div>
@@ -994,7 +919,7 @@ export class App extends React.Component<AppProps, AppState> {
           </div>
         )}
 
-        {this.state.exportOpen && (
+        {this.s.exportOpen && (
           <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 280 }}>
             <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
               <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Export PNG</div>
@@ -1002,9 +927,9 @@ export class App extends React.Component<AppProps, AppState> {
             </div>
             <div style={css('padding:8px 10px;display:flex;flex-direction:column;gap:2px;')}>
               {EXPORT_TOGGLES.map(({ key, label }) => {
-                const on = this.state.exportOpts[key];
+                const on = this.s.exportOpts[key];
                 return (
-                  <button key={key} onClick={() => this.setState((s) => { const exportOpts = { ...s.exportOpts, [key]: !s.exportOpts[key] }; saveSettings({ exportOpts }); return { exportOpts }; })} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
+                  <button key={key} onClick={() => this.s.toggleExportOpt(key)} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
                     <span style={{ flex: '0 0 auto', width: 16, height: 16, borderRadius: 5, border: `1px solid ${on ? 'var(--accent)' : 'var(--borderStrong)'}`, background: on ? 'var(--accent)' : 'transparent', color: 'var(--accentFg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <Ic n="check" size={11} />}</span>
                     <span style={css('font-size:12.5px;')}>{label}</span>
                   </button>
@@ -1098,22 +1023,22 @@ export class App extends React.Component<AppProps, AppState> {
                           </button>
                         ))}
                       </div>
-                      <button onClick={() => this.setState({ persona: null })} style={css('margin-top:16px;border:none;background:none;color:var(--mute);font-size:11.5px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;')}>Clear lens instead</button>
+                      <button onClick={() => this.s.clearPersona()} style={css('margin-top:16px;border:none;background:none;color:var(--mute);font-size:11.5px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;')}>Clear lens instead</button>
                     </div>
                   </div>
                 )}
-                {hasVariants && isNarrow && !this.state.versionsOpen && (
+                {hasVariants && isNarrow && !this.s.versionsOpen && (
                   <button
-                    onClick={() => this.setState({ versionsOpen: true })}
+                    onClick={() => this.s.openVersions()}
                     style={css('position:absolute;right:12px;top:12px;z-index:8;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px;box-shadow:var(--shadow);')}
                   ><Ic n="branch" size={13} /> {journey?.variantOf ? journey.variantLabel ?? journey.id : 'Current'} <Ic n="chevron-down" size={13} /></button>
                 )}
-                {hasVariants && (!isNarrow || this.state.versionsOpen) && (
+                {hasVariants && (!isNarrow || this.s.versionsOpen) && (
                   <div style={{ ...css('position:absolute;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);overflow-y:auto;animation:slideUp 200ms ease;'), right: 14, left: isNarrow ? 12 : 'auto', maxHeight: isNarrow ? '45vh' : 'none' }}>
                     <div style={css('display:flex;align-items:center;')}>
                       <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
                       {isNarrow && (
-                        <button onClick={() => this.setState({ versionsOpen: false })} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;')}><Ic n="x" size={15} /></button>
+                        <button onClick={() => this.s.closeVersions()} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;')}><Ic n="x" size={15} /></button>
                       )}
                     </div>
                     {versions.map((v) => (
@@ -1178,23 +1103,23 @@ export class App extends React.Component<AppProps, AppState> {
                         )}
                       </div>
                     ))}
-                    {this.state.notePopover && this.state.notePopover.journey === journeyId && journeyRects[this.state.notePopover.step] && (
+                    {this.s.notePopover && this.s.notePopover.journey === journeyId && journeyRects[this.s.notePopover.step] && (
                       <div
                         onPointerDown={(e) => e.stopPropagation()}
-                        style={{ position: 'absolute', left: journeyRects[this.state.notePopover.step]!.x, top: journeyRects[this.state.notePopover.step]!.y + journeyRects[this.state.notePopover.step]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
+                        style={{ position: 'absolute', left: journeyRects[this.s.notePopover.step]!.x, top: journeyRects[this.s.notePopover.step]!.y + journeyRects[this.s.notePopover.step]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
                       >
-                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.state.notePopover.step}</div>
+                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.s.notePopover.step}</div>
                         <textarea
                           autoFocus
-                          value={this.state.noteDraft}
-                          onChange={(e) => this.setState({ noteDraft: e.target.value })}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.step, this.state.noteDraft); } if (e.key === 'Escape') this.setState({ notePopover: null }); }}
+                          value={this.s.noteDraft}
+                          onChange={(e) => this.s.setNoteDraft(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.s.notePopover!.journey, this.s.notePopover!.step, this.s.noteDraft); } if (e.key === 'Escape') this.s.closeNotePopover(); }}
                           placeholder="What should change here?"
                           style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: isNarrow ? 16 : 12.5, fontFamily: 'inherit', outline: 'none' }}
                         />
                         <div style={css('display:flex;align-items:center;justify-content:flex-end;gap:7px;')}>
-                          <button onClick={() => this.setState({ notePopover: null, noteDraft: '' })} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
-                          <button onClick={() => void this.saveNote(this.state.notePopover!.journey, this.state.notePopover!.step, this.state.noteDraft)} disabled={!this.state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.state.noteDraft.trim() ? 'pointer' : 'default', opacity: this.state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
+                          <button onClick={() => this.s.cancelNote()} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
+                          <button onClick={() => void this.saveNote(this.s.notePopover!.journey, this.s.notePopover!.step, this.s.noteDraft)} disabled={!this.s.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.s.noteDraft.trim() ? 'pointer' : 'default', opacity: this.s.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
                         </div>
                       </div>
                     )}
@@ -1204,11 +1129,11 @@ export class App extends React.Component<AppProps, AppState> {
                   {(() => {
                     const detailToggle = (
                       <button
-                        data-tip={this.state.detailOpen ? 'Hide step detail' : 'Show step detail'}
+                        data-tip={this.s.detailOpen ? 'Hide step detail' : 'Show step detail'}
                         data-tip-pos="up"
-                        onClick={() => this.setState((s) => ({ detailOpen: !s.detailOpen }))}
+                        onClick={() => this.s.toggleDetail()}
                         style={{ ...css('border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);display:flex;align-items:center;justify-content:center;'), flex: '0 0 auto', marginLeft: 'auto', width: isNarrow ? 36 : 30, height: isNarrow ? 36 : 30 }}
-                      >{this.state.detailOpen ? <Ic n="chevron-down" size={isNarrow ? 19 : 16} /> : <Ic n="chevron-up" size={isNarrow ? 19 : 16} />}</button>
+                      >{this.s.detailOpen ? <Ic n="chevron-down" size={isNarrow ? 19 : 16} /> : <Ic n="chevron-up" size={isNarrow ? 19 : 16} />}</button>
                     );
                     const navGroup = (
                       <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
@@ -1308,20 +1233,20 @@ export class App extends React.Component<AppProps, AppState> {
           </div>
         </div>
 
-        {this.state.promptText !== null && (
-          <div onPointerDown={() => this.setState({ promptText: null })} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
+        {this.s.promptText !== null && (
+          <div onPointerDown={() => this.s.clearPrompt()} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
             <div onPointerDown={(e) => e.stopPropagation()} style={css('width:560px;max-width:90vw;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;gap:12px;')}>
               <div style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>Copy prompt manually</div>
               <div style={css('font-size:12px;color:var(--dim);line-height:1.5;')}>Clipboard access was blocked — select all and copy the block below.</div>
               <textarea
                 readOnly
                 autoFocus
-                value={this.state.promptText}
+                value={this.s.promptText}
                 onFocus={(e) => e.currentTarget.select()}
                 style={{ width: '100%', height: 260, resize: 'vertical', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: 12, fontSize: 12, fontFamily: mono, outline: 'none' }}
               />
               <div style={css('display:flex;justify-content:flex-end;')}>
-                <button onClick={() => this.setState({ promptText: null })} style={css('height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>Done</button>
+                <button onClick={() => this.s.clearPrompt()} style={css('height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>Done</button>
               </div>
             </div>
           </div>
