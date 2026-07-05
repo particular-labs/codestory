@@ -3,18 +3,15 @@ import { useStore } from 'zustand';
 import { composeExportPng, DEFAULT_EXPORT_OPTS, summarize, type ExportOpts } from './export';
 import { frameOffset } from './frame';
 import { activePrefix, deriveGraph, type Graph, unionOf } from './graph';
-import { Ic } from './icons';
 import { loadSettings } from './settings';
 import { createAppStore, type AppInit, type AppState } from './store';
 import { ExportPopover } from './components/ExportPopover';
 import { Header } from './components/Header';
 import { ChainMap } from './components/ChainMap';
-import { DetailPanel } from './components/DetailPanel';
+import { JourneyCanvas } from './components/JourneyCanvas';
 import { Rail } from './components/Rail';
-import { Transport } from './components/Transport';
 import { NotesHub } from './components/NotesHub';
 import { PromptModal } from './components/PromptModal';
-import { VersionsPicker } from './components/VersionsPicker';
 import { css, GLYPHS, mono, statusMeta, statusPill, stepKind, stepTitle, TYPE_TEXT } from './ui';
 import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlState';
 import { useCardDrag } from './useCardDrag';
@@ -696,6 +693,17 @@ export function App(props: AppProps) {
     const journeyDims = lay ? { w: Math.max(baseW, jf.w), h: Math.max(360, jf.h) } : { w: 480, h: 360 };
     const journeyEdgeTuples: EdgeTuple[] = (journey?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
     const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, state.selectedStepId, (id) => selectNode(id), vertical) : null;
+    const ghostEdgesEl = ghostEdges.length > 0
+      ? <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, journeyRects, journeyDims, null, null, null, vertical)}</div>
+      : null;
+    const ghostCards = ghostSteps.map((n) => {
+      const p = eff(n);
+      const kind = stepKind(n);
+      return {
+        id: n.id, title: stepTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!,
+        style: { position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: STEP_W, minHeight: STEP_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 } as React.CSSProperties,
+      };
+    });
 
     // crumbs
     const crumbBtn = (last: boolean): React.CSSProperties => ({ border: 'none', background: 'none', padding: '3px 6px', borderRadius: 5, color: last ? 'var(--fg)' : 'var(--dim)', fontWeight: last ? 600 : 500, fontSize: 12.5, cursor: last ? 'default' : 'pointer' });
@@ -817,123 +825,54 @@ export function App(props: AppProps) {
             )}
 
             {isJourney && (
-              <div style={css('flex:1 1 auto;display:flex;flex-direction:column;min-height:0;position:relative;animation:fadeZoom 220ms ease;')}>
-                {lensBlocked && (
-                  <div style={css('position:absolute;inset:0;z-index:14;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);animation:panelUp 200ms ease;')}>
-                    <div style={css('max-width:400px;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:26px 26px 22px;')}>
-                      <div style={css('width:34px;height:34px;border-radius:9px;background:var(--accentSoft);border:1px solid var(--accent);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:15px;margin:0 auto 14px;')}>⦻</div>
-                      <div style={css('font-size:15.5px;font-weight:650;letter-spacing:-0.01em;')}>Not on the {persona?.title} path</div>
-                      <div style={css('font-size:12.5px;color:var(--dim);line-height:1.55;margin-top:8px;')}>The <b style={css('color:var(--fg);font-weight:600;')}>{persona?.title}</b> lens doesn’t pass through <b style={css('color:var(--fg);font-weight:600;')}>{journey?.title}</b>. Pick a journey this persona actually uses:</div>
-                      <div style={css('display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px;')}>
-                        {(jJourneys ?? []).map((id, i) => (
-                          <button key={id} onClick={() => enterJourney(id)} style={css('display:flex;align-items:center;gap:8px;height:34px;padding:0 13px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>
-                            <span style={css("font-family:'JetBrains Mono',monospace;font-size:10px;opacity:0.85;")}>{i + 1}</span>{d.byId.get(id)?.title ?? id}
-                          </button>
-                        ))}
-                      </div>
-                      <button onClick={() => state.clearPersona()} style={css('margin-top:16px;border:none;background:none;color:var(--mute);font-size:11.5px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;')}>Clear lens instead</button>
-                    </div>
-                  </div>
-                )}
-                {hasVariants && (
-                  <VersionsPicker
-                    versions={versions}
-                    journey={journey}
-                    journeyId={journeyId}
-                    baseEntryId={baseEntryId}
-                    isNarrow={isNarrow}
-                    versionsOpen={state.versionsOpen}
-                    setVariant={setVariant}
-                    openVersions={state.openVersions}
-                    closeVersions={state.closeVersions}
-                  />
-                )}
-                <div style={css('flex:1 1 auto;position:relative;overflow:auto;background:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;')}>
-                  <div style={css('position:absolute;left:16px;top:14px;z-index:5;')}>
-                    <div style={css('font-size:17px;font-weight:650;letter-spacing:-0.015em;')}>{journey?.title}</div>
-                    <div style={css('font-size:12px;color:var(--dim);margin-top:2px;')}>{journey ? portsSummary(journey) : ''}</div>
-                  </div>
-                  <div ref={canvasEl} style={{ position: 'relative', width: journeyDims.w, height: journeyDims.h, margin: vertical ? '64px auto 40px' : '64px 40px 40px' }}>
-                    {ghostEdges.length > 0 && (
-                      <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, journeyRects, journeyDims, null, null, null, vertical)}</div>
-                    )}
-                    <div style={css('position:absolute;left:0;top:0;')}>{journeyEdgesEl}</div>
-                    {ghostSteps.map((n) => {
-                      const p = eff(n);
-                      const kind = stepKind(n);
-                      return (
-                        <div key={'ghost-' + n.id} data-export-step data-ghost style={{ position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: STEP_W, minHeight: STEP_H, borderRadius: 10, border: '1.5px dashed var(--borderStrong)', background: 'var(--surface)', padding: '9px 11px', display: 'flex', flexDirection: 'column', opacity: 0.22, pointerEvents: 'none', zIndex: 1 }}>
-                          <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
-                            <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);")}>{GLYPHS[kind]}{TYPE_TEXT[kind]}</span>
-                          </div>
-                          <div style={css('font-size:13px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;margin-top:5px;')}>{stepTitle(n)}</div>
-                        </div>
-                      );
-                    })}
-                    {journeySteps.map((n) => (
-                      <div key={n.id} data-export-step onPointerDown={n.onPointerDown} style={n.style}>
-                        <div style={css('display:flex;align-items:center;justify-content:space-between;gap:8px;')}>
-                          <span style={css("font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.06em;color:var(--mute);display:flex;align-items:center;gap:5px;")}>{n.glyph}{n.typeText}</span>
-                          <span style={css('display:flex;align-items:center;gap:5px;')}>
-                            {n.noteCount > 0 && (
-                              <span title={`${n.noteCount} open note${n.noteCount > 1 ? 's' : ''}`} style={css("font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;color:var(--accentFg);background:var(--accent);border-radius:9px;min-width:14px;height:14px;padding:0 4px;display:flex;align-items:center;justify-content:center;")}>✎{n.noteCount}</span>
-                            )}
-                            {n.diff && (
-                              <span style={css("font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:4px;padding:1px 5px;")}>{n.diff === 'new' ? '+ new' : 'Δ'}</span>
-                            )}
-                            <span style={n.dotStyle}></span>
-                          </span>
-                        </div>
-                        <div style={css('font-size:13px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;margin-top:5px;')}>{n.title}</div>
-                        {n.isSubflow && (
-                          <button
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onClick={(e) => { e.stopPropagation(); stepInto(n.subJourney!, n.id); }}
-                            style={css('margin-top:7px;align-self:flex-start;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:5px;padding:2px 8px;display:flex;align-items:center;gap:4px;cursor:pointer;')}
-                          >Step into ↘</button>
-                        )}
-                      </div>
-                    ))}
-                    {state.notePopover && state.notePopover.journey === journeyId && journeyRects[state.notePopover.step] && (
-                      <div
-                        onPointerDown={(e) => e.stopPropagation()}
-                        style={{ position: 'absolute', left: journeyRects[state.notePopover.step]!.x, top: journeyRects[state.notePopover.step]!.y + journeyRects[state.notePopover.step]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
-                      >
-                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {state.notePopover.step}</div>
-                        <textarea
-                          autoFocus
-                          value={state.noteDraft}
-                          onChange={(e) => state.setNoteDraft(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void saveNote(state.notePopover!.journey, state.notePopover!.step, state.noteDraft); } if (e.key === 'Escape') state.closeNotePopover(); }}
-                          placeholder="What should change here?"
-                          style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: isNarrow ? 16 : 12.5, fontFamily: 'inherit', outline: 'none' }}
-                        />
-                        <div style={css('display:flex;align-items:center;justify-content:flex-end;gap:7px;')}>
-                          <button onClick={() => state.cancelNote()} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
-                          <button onClick={() => void saveNote(state.notePopover!.journey, state.notePopover!.step, state.noteDraft)} disabled={!state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: state.noteDraft.trim() ? 'pointer' : 'default', opacity: state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div style={css('flex:0 0 auto;border-top:1px solid var(--border);background:var(--surface);z-index:10;')}>
-                  <Transport
-                    narration={narration}
-                    stepLabel={stepLabel}
-                    pct={pct}
-                    cont={cont}
-                    atStart={atStart}
-                    atEnd={atEnd}
-                    isNarrow={isNarrow}
-                    detailOpen={state.detailOpen}
-                    step={step}
-                    toggleDetail={state.toggleDetail}
-                  />
-                  {detailShown && selNode && (
-                    <DetailPanel selNode={selNode} selStatus={selStatus} isNarrow={isNarrow} chk={chk} />
-                  )}
-                </div>
-              </div>
+              <JourneyCanvas
+                lensBlocked={lensBlocked}
+                personaTitle={persona?.title}
+                jJourneys={jJourneys}
+                byId={d.byId}
+                enterJourney={enterJourney}
+                clearPersona={state.clearPersona}
+                hasVariants={hasVariants}
+                versions={versions}
+                journey={journey}
+                journeyId={journeyId}
+                baseEntryId={baseEntryId}
+                isNarrow={isNarrow}
+                versionsOpen={state.versionsOpen}
+                setVariant={setVariant}
+                openVersions={state.openVersions}
+                closeVersions={state.closeVersions}
+                journeyTitle={journey?.title}
+                journeyPorts={journey ? portsSummary(journey) : ''}
+                journeyDims={journeyDims}
+                vertical={vertical}
+                canvasRef={canvasEl}
+                ghostEdgesEl={ghostEdgesEl}
+                journeyEdgesEl={journeyEdgesEl}
+                ghostCards={ghostCards}
+                journeySteps={journeySteps}
+                stepInto={stepInto}
+                notePopover={state.notePopover}
+                noteDraft={state.noteDraft}
+                journeyRects={journeyRects}
+                saveNote={saveNote}
+                setNoteDraft={state.setNoteDraft}
+                closeNotePopover={state.closeNotePopover}
+                cancelNote={state.cancelNote}
+                narration={narration}
+                stepLabel={stepLabel}
+                pct={pct}
+                cont={cont}
+                atStart={atStart}
+                atEnd={atEnd}
+                detailOpen={state.detailOpen}
+                step={step}
+                toggleDetail={state.toggleDetail}
+                detailShown={detailShown}
+                selNode={selNode}
+                selStatus={selStatus}
+                chk={chk}
+              />
             )}
           </div>
         </div>
