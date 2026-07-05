@@ -8,6 +8,7 @@ import { loadSettings } from './settings';
 import { createAppStore, type AppInit, type AppState } from './store';
 import { ExportPopover } from './components/ExportPopover';
 import { Header } from './components/Header';
+import { Rail } from './components/Rail';
 import { NotesHub } from './components/NotesHub';
 import { PromptModal } from './components/PromptModal';
 import { VersionsPicker } from './components/VersionsPicker';
@@ -617,36 +618,6 @@ export function App(props: AppProps) {
       }];
     });
 
-    // one rail row + its sub-flow children, recursively; `visited` holds the
-    // ancestor chain so a cyclic sub-flow reference can never recurse forever
-    const railRow = (id: string, path: string, inJ: boolean, badge: string, badgeStyle: React.CSSProperties, visited: Set<string>): React.ReactNode => {
-      const b = d.byId.get(id);
-      if (!b) return null;
-      const subs = (d.subsByJourney.get(id) ?? []).filter((s) => !visited.has(s));
-      const open = state.railOpen[path] ?? true; // expanded by default — visible sub-flows are what makes the rail self-explanatory
-      const active = curEntry()?.id === id; // highlight the journey being viewed, not the stack root
-      return (
-        <div key={path} style={css('display:flex;flex-direction:column;gap:2px;')}>
-          <div style={css('display:flex;align-items:center;gap:0;')}>
-            <button
-              onClick={() => state.toggleRail(path)}
-              data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
-              style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
-            >{open ? <Ic n="chevron-down" size={14} /> : <Ic n="chevron-right" size={14} />}</button>
-            <button onClick={() => { enterPath(path.split(PATH_SEP)); closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
-              <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
-              <span style={badgeStyle}>{badge}</span>
-            </button>
-          </div>
-          {open && subs.length > 0 && (
-            <div style={css('margin-left:11px;padding-left:8px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
-              {subs.map((s) => railRow(s, `${path}${PATH_SEP}${s}`, inJ, `${d.byId.get(s)?.steps.length ?? 0}`, countBadge, new Set([...visited, s])))}
-            </div>
-          )}
-        </div>
-      );
-    };
     const railHint = persona
       ? persona.persona ?? persona.title
       : isJourney
@@ -816,45 +787,27 @@ export function App(props: AppProps) {
           {isNarrow && drawerOpen && (
             <div onPointerDown={closeDrawer} style={css('position:absolute;inset:0;z-index:38;background:var(--overlay);animation:fadeZoom 160ms ease;')}></div>
           )}
-          <div style={railStyle}>
-            <div>
-              <div style={css('padding:0 4px 9px;')}>
-                <div style={css('font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Personas</div>
-                <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Lens · reorders the journeys</div>
-              </div>
-              <div style={css('display:flex;flex-direction:column;gap:4px;')}>
-                {personaList.map((j) => (
-                  <button key={j.id} onClick={j.onClick} style={j.style}>
-                    <span style={css('display:flex;align-items:center;gap:9px;')}>
-                      <span style={j.dotStyle}></span>
-                      <span style={css('font-size:13px;font-weight:550;')}>{j.label}</span>
-                    </span>
-                    <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);")}>{j.count}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div style={css('padding:0 4px 9px;')}>
-                <div style={css('font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>{jJourneys ? `${persona!.title} path` : 'Journeys'}</div>
-                <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>{jJourneys ? 'Steps in this persona’s flow' : 'Open a journey to inspect'}</div>
-              </div>
-              <div style={css('display:flex;flex-direction:column;gap:2px;')}>
-                {/* Root is "selected" only when it's truly the whole map — view=map AND no persona lens; one active thing at a time */}
-                <button onClick={() => { goCrumb(0); closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !persona ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !persona ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                  <span style={css('display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:var(--accentSoft);color:var(--accent);font-size:11px;flex:0 0 auto;')}>⊞</span>
-                  <span style={css('flex:1 1 auto;text-align:left;')}>{ROOT_LABEL}</span>
-                  <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap && !persona ? 'here' : 'root'}</span>
-                </button>
-                <div style={css('margin-left:9px;padding-left:2px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px;')}>
-                  {railJourneys.map((b) => railRow(b.id, b.id, b.inJ, b.badge, b.badgeStyle, new Set([b.id])))}
-                </div>
-              </div>
-            </div>
-
-            <div style={css('margin-top:auto;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--inset);font-size:11.5px;line-height:1.5;color:var(--dim);')}>{railHint}</div>
-          </div>
+          <Rail
+            railStyle={railStyle}
+            personaList={personaList}
+            railJourneys={railJourneys}
+            jJourneys={jJourneys}
+            personaTitle={persona?.title}
+            isMap={isMap}
+            hasPersona={!!persona}
+            rootLabel={ROOT_LABEL}
+            railHint={railHint}
+            countBadge={countBadge}
+            goCrumb={goCrumb}
+            closeDrawer={closeDrawer}
+            byId={d.byId}
+            subsByJourney={d.subsByJourney}
+            railOpen={state.railOpen}
+            toggleRail={state.toggleRail}
+            enterPath={enterPath}
+            curEntryId={curEntry()?.id ?? null}
+            pathSep={PATH_SEP}
+          />
 
           <div style={css('flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;')}>
             {isMap && (
