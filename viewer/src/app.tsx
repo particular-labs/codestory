@@ -1,11 +1,13 @@
 import * as React from 'react';
+import { useStore } from 'zustand';
 import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type ExportOpts } from './export';
 import { frameOffset } from './frame';
 import { activePrefix, deriveGraph, type Graph, unionOf } from './graph';
 import { Ic } from './icons';
 import { loadSettings } from './settings';
-import { createAppStore, type AppInit, type AppState, type AppStore, type AppStoreApi } from './store';
+import { createAppStore, type AppInit, type AppState } from './store';
 import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlState';
+import { useCardDrag } from './useCardDrag';
 
 // ── API projection (viewer-local; SSOT is src/schema.ts, this is read-only) ──
 
@@ -277,7 +279,7 @@ const TYPE_TEXT: Record<string, string> = { step: 'STEP', decision: 'DECISION', 
 export interface StackEntry { id: string; callerJourney?: string; callerNode?: string }
 
 // AppState (the 24 fields) + all actions now live in the zustand vanilla store
-// (./store, SSOT). The App holds a per-instance store and reads it via `this.s`.
+// (./store, SSOT). The App holds a per-mount store and reads it via `useStore`.
 
 const stepKind = (n: ApiStep) => (n.journey ? 'subflow' : n.type);
 const stepTitle = (n: ApiStep) => n.label ?? n.port ?? n.id;
@@ -299,122 +301,141 @@ const portsSummary = (b: ApiJourney) =>
 const locOf = (s: AppState): Loc => relevantLoc({ journeys: s.stack.map((e) => e.id), step: s.selectedStepId, persona: s.persona, variants: s.variantSel });
 
 
-export class App extends React.Component<AppProps> {
-  // per-instance zustand vanilla store (SSOT for the 24 state fields). Created here,
-  // NOT a module singleton — parity mounts App several times with different props.
-  private store: AppStoreApi;
-  private _unsub: (() => void) | null = null;
-  /** Read the current store state + actions (replaces every old `this.state`). */
-  private get s(): AppStore { return this.store.getState(); }
+/** Everything the old constructor computed once, per mount (two-phase URL seed). */
+function computeInit(props: AppProps): AppInit {
+  const isNarrow = narrowMql()?.matches ?? false;
+  // precedence: explicit URL/saved flow > narrow ? vertical : horizontal
+  const flow = props.flowDirection ?? (isNarrow ? 'vertical' : 'horizontal');
+  // seed location from the URL so a refresh / shared link lands on the same view.
+  // caller-chain info is enriched (and ids validated) in the mount effect.
+  const loc = parseLocation(window.location.search);
+  const exportOpts = { ...DEFAULT_EXPORT_OPTS, ...(loadSettings().exportOpts ?? {}) };
+  return { data: props.data, theme: props.defaultTheme, flow, isNarrow, loc, exportOpts };
+}
 
-  constructor(props: AppProps) {
-    super(props);
-    const isNarrow = narrowMql()?.matches ?? false;
-    // precedence: explicit URL/saved flow > narrow ? vertical : horizontal
-    const flow = props.flowDirection ?? (isNarrow ? 'vertical' : 'horizontal');
-    // seed location from the URL so a refresh / shared link lands on the same view.
-    // caller-chain info is enriched (and ids validated) in componentDidMount.
-    const loc = parseLocation(window.location.search);
-    this._initialLoc = loc;
-    const exportOpts = { ...DEFAULT_EXPORT_OPTS, ...(loadSettings().exportOpts ?? {}) };
-    const init: AppInit = { data: props.data, theme: props.defaultTheme, flow, isNarrow, loc, exportOpts };
-    this.store = createAppStore(init); // seeds the raw two-phase state (cDM validates)
-  }
+export function App(props: AppProps) {
+  // per-mount seed computed exactly once (the old constructor body).
+  const initRef = React.useRef<AppInit | undefined>(undefined);
+  if (!initRef.current) initRef.current = computeInit(props);
+  const init = initRef.current;
 
-  private _initialLoc: Loc;
-  private _restoring = false; // guard: don't echo a popstate/restore back into history
+  // per-mount zustand vanilla store (SSOT for the 24 state fields), stable across
+  // re-renders. NOT a module singleton — parity mounts App several times.
+  const [store] = React.useState(() => createAppStore(init));
+  // whole-state subscription: re-renders on exactly the changes the old
+  // subscribe→forceUpdate did (every store `set` mints a new state object).
+  const state = useStore(store);
 
-  private _d: Graph | null = null;
-  private _lay: Record<string, Layout> = {};
-  private _es: EventSource | null = null;
-  private _mql: MediaQueryList | null = null;
-  // one place updates isNarrow; a narrow→wide change also closes the drawer so it
-  // can't linger as a stuck overlay when the rail returns inline
-  private _onNarrow = (e: MediaQueryListEvent) => this.s.setNarrow(e.matches);
+  // derived graph, keyed on data identity (the old `_d` cache; refetch swaps data).
+  const d = React.useMemo(() => deriveGraph(state.data), [state.data]);
 
-  // ── live reload: SSE tells us .codestory/ changed → refetch + re-render, keeping
-  //    the current view/stack/selection wherever those ids still exist ──
-  componentDidMount() {
-    // subscribe first so the restore below (and every later action) re-renders; the
-    // store's prev/next lets us drive the URL sync (old componentDidUpdate) here.
-    this._unsub = this.store.subscribe((state, prev) => { this._syncUrl(state, prev); this.forceUpdate(); });
-    try {
-      const es = new EventSource('/api/events');
-      es.addEventListener('reload', () => { void this.refetch(); });
-      this._es = es;
-    } catch { /* SSE unsupported — no live reload, viewer still works */ }
-    this._mql = narrowMql();
-    this._mql?.addEventListener('change', this._onNarrow);
-    // enrich the URL-seeded location: validate ids + rebuild the caller chain
-    const l = this._initialLoc;
-    if (l.journeys.length || l.step || l.persona || Object.keys(l.variants).length) { this._restoring = true; this.restoreLocation(l); }
-    window.addEventListener('popstate', this._onPopState);
-  }
-  componentWillUnmount() { this._unsub?.(); this._es?.close(); this._mql?.removeEventListener('change', this._onNarrow); window.removeEventListener('popstate', this._onPopState); }
+  // layout cache (the old `_lay`): a ref that ACCUMULATES keys across renders and
+  // resets only when data identity changes (refetch) — a plain useMemo would drop
+  // sibling keys and shift card positions. Reset mirrors refetch clearing `_lay`.
+  const layRef = React.useRef<Record<string, Layout>>({});
+  const dataRef = React.useRef(state.data);
+  if (dataRef.current !== state.data) { dataRef.current = state.data; layRef.current = {}; }
 
-  // ── location ↔ URL sync (SSOT: state drives the URL; back/forward drives state) ──
-  private _onPopState = () => { this._restoring = true; this.restoreLocation(parseLocation(window.location.search)); };
+  // the URL-seeded location (enriched once in the mount effect) + the restore guard
+  // (don't echo a popstate/restore back into history).
+  const initialLocRef = React.useRef(init.loc);
+  const restoringRef = React.useRef(false);
+
+  const canvasEl = React.useRef<HTMLDivElement>(null);
+  const startDrag = useCardDrag(store, d);
 
   /** Reflect location-bearing state into the URL after it changes: pushState on a
    *  journey-path move (so back/forward walks hops), replaceState for step/persona/
    *  variant tweaks (so history isn't flooded). Skips the echo from a restore.
    *  Runs on every store change (subscribe) with the store's prev/next snapshots. */
-  private _syncUrl(state: AppState, prevState: AppState) {
-    if (this._restoring) { this._restoring = false; return; }
-    const next = serializeLocation(locOf(state));
-    if (next === serializeLocation(locOf(prevState))) return;
-    const pathMoved = prevState.stack.map((e) => e.id).join('~') !== state.stack.map((e) => e.id).join('~');
-    window.history[pathMoved ? 'pushState' : 'replaceState']({}, '', next ? `?${next}` : window.location.pathname);
-  }
+  const syncUrl = (next: AppState, prevState: AppState) => {
+    if (restoringRef.current) { restoringRef.current = false; return; }
+    const nextUrl = serializeLocation(locOf(next));
+    if (nextUrl === serializeLocation(locOf(prevState))) return;
+    const pathMoved = prevState.stack.map((e) => e.id).join('~') !== next.stack.map((e) => e.id).join('~');
+    window.history[pathMoved ? 'pushState' : 'replaceState']({}, '', nextUrl ? `?${nextUrl}` : window.location.pathname);
+  };
 
-  closeDrawer = () => this.s.closeDrawer();
-
-  async refetch() {
+  // ── live reload: SSE tells us .codestory/ changed → refetch + re-render, keeping
+  //    the current view/stack/selection wherever those ids still exist ──
+  const refetch = async () => {
     try {
       const res = await fetch('/api/journeys');
       if (!res.ok) return;
       const data = (await res.json()) as ApiData;
-      this._d = null; // journey set may have changed → drop derived-graph + layout caches
-      this._lay = {};
-      this.s.applyRefetch(data);
+      layRef.current = {}; // journey set may have changed → drop layout cache (d recomputes on data identity)
+      store.getState().applyRefetch(data);
     } catch { /* network blip — keep showing current data */ }
-  }
+  };
+
+  // ── mount effect: URL-sync subscribe → SSE → matchMedia → seeded restore →
+  //    popstate, in the SAME ORDER as the old componentDidMount. Subscribe BEFORE
+  //    restore so restore's set() is observed and swallowed by the restore guard.
+  //    useStore drives re-renders, so syncUrl must NOT force one. ──
+  React.useEffect(() => {
+    const unsub = store.subscribe((s, prev) => syncUrl(s, prev));
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('/api/events');
+      es.addEventListener('reload', () => { void refetch(); });
+    } catch { /* SSE unsupported — no live reload, viewer still works */ }
+    const mql = narrowMql();
+    // one place updates isNarrow; a narrow→wide change also closes the drawer so it
+    // can't linger as a stuck overlay when the rail returns inline
+    const onNarrow = (ev: MediaQueryListEvent) => store.getState().setNarrow(ev.matches);
+    mql?.addEventListener('change', onNarrow);
+    // enrich the URL-seeded location: validate ids + rebuild the caller chain
+    const l = initialLocRef.current;
+    if (l.journeys.length || l.step || l.persona || Object.keys(l.variants).length) {
+      restoringRef.current = true;
+      store.getState().restoreLocation(l);
+    }
+    const onPop = () => { restoringRef.current = true; store.getState().restoreLocation(parseLocation(window.location.search)); };
+    window.addEventListener('popstate', onPop);
+    return () => {
+      unsub();
+      es?.close();
+      mql?.removeEventListener('change', onNarrow);
+      window.removeEventListener('popstate', onPop);
+    };
+  }, []);
+
+  const closeDrawer = () => state.closeDrawer();
 
   // ── notes (annotations) ──
-  allNotes() { return this.s.data.notes ?? []; }
-  openNotes() { return this.allNotes().filter((n) => n.status === 'open'); }
-  openNotesFor(journey: string, step: string) { return this.allNotes().filter((n) => n.journey === journey && n.step === step && n.status === 'open'); }
+  const allNotes = () => state.data.notes ?? [];
+  const openNotes = () => allNotes().filter((n) => n.status === 'open');
+  const openNotesFor = (journey: string, step: string) => allNotes().filter((n) => n.journey === journey && n.step === step && n.status === 'open');
 
-  async postNote(body: Record<string, unknown>): Promise<boolean> {
+  const postNote = async (body: Record<string, unknown>): Promise<boolean> => {
     try {
       const res = await fetch('/api/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      if (res.ok) await this.refetch(); // snappy update; the file-watch SSE would refetch too
+      if (res.ok) await refetch(); // snappy update; the file-watch SSE would refetch too
       return res.ok;
     } catch { return false; }
-  }
-  async saveNote(journey: string, step: string, text: string) {
+  };
+  const saveNote = async (journey: string, step: string, text: string) => {
     if (!text.trim()) return;
-    const ok = await this.postNote({ journey, step, text: text.trim() });
-    if (ok) this.s.cancelNote();
-  }
-  applyNote(id: string) { void this.postNote({ id, status: 'applied' }); }
-  deleteNote(id: string) { void this.postNote({ id, delete: true }); }
-  clearNotes() { void this.postNote({ clear: true }); }
-  goToNote(n: { journey: string; step?: string }) {
-    this.enterJourney(n.journey);
-    if (n.step) this.s.selectNode(n.step);
-  }
+    const ok = await postNote({ journey, step, text: text.trim() });
+    if (ok) state.cancelNote();
+  };
+  const applyNote = (id: string) => { void postNote({ id, status: 'applied' }); };
+  const deleteNote = (id: string) => { void postNote({ id, delete: true }); };
+  const clearNotes = () => { void postNote({ clear: true }); };
+  const goToNote = (n: { journey: string; step?: string }) => {
+    enterJourney(n.journey);
+    if (n.step) state.selectNode(n.step);
+  };
 
   /** Serialize every open note + its step context into an LLM-ready markdown block. */
-  buildPrompt(): string {
-    const d = this.d();
+  const buildPrompt = (): string => {
     const out: string[] = [
       '# Codestory annotations — apply these changes',
       '',
       'Each note below requests a change against a step in the codestory journeys under `.codestory/`. For each note, edit the referenced journey JSON and/or the code it points to, then mark the note applied.',
       '',
     ];
-    this.openNotes().forEach((note, i) => {
+    openNotes().forEach((note, i) => {
       const journey = d.byId.get(note.journey);
       const step = note.step ? journey?.steps.find((n) => n.id === note.step) : undefined;
       out.push(`## Note ${i + 1}`);
@@ -431,85 +452,76 @@ export class App extends React.Component<AppProps> {
       out.push('');
     });
     return out.join('\n');
-  }
-  async copyPrompt() {
-    const text = this.buildPrompt();
+  };
+  const copyPrompt = async () => {
+    const text = buildPrompt();
     try {
       await navigator.clipboard.writeText(text);
-      this.s.setCopied(true);
-      setTimeout(() => this.s.setCopied(false), 1500);
+      state.setCopied(true);
+      setTimeout(() => store.getState().setCopied(false), 1500);
     } catch {
-      this.s.setPrompt(text); // fallback: show a selectable textarea
+      state.setPrompt(text); // fallback: show a selectable textarea
     }
-  }
+  };
 
-  d() {
-    if (this._d) return this._d;
-    return (this._d = deriveGraph(this.s.data));
-  }
-
-  layout(key: string, boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout {
+  const layout = (key: string, boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout => {
     const k = `${key}:${vertical ? 'v' : 'h'}`;
-    this._lay[k] = this._lay[k] ?? computeLayout(boxes, edges, vertical, gaps);
-    return this._lay[k]!;
-  }
+    layRef.current[k] = layRef.current[k] ?? computeLayout(boxes, edges, vertical, gaps);
+    return layRef.current[k]!;
+  };
 
-  // ── navigation (read helpers on the class; mutations delegate to the store) ──
+  // ── navigation (read helpers; mutations delegate to the store) ──
 
-  curEntry() { return this.s.stack[this.s.stack.length - 1] ?? null; }
+  const curEntry = () => state.stack[state.stack.length - 1] ?? null;
   /** The displayed journey: the selected variant of the stacked base id, else the base. */
-  curJourney() {
-    const e = this.curEntry();
+  const curJourney = () => {
+    const e = curEntry();
     if (!e) return null;
-    const sel = this.s.variantSel[e.id];
-    return this.d().byId.get(sel ?? e.id) ?? null;
-  }
-  setVariant(baseId: string, journeyId: string) { this.s.setVariant(baseId, journeyId); }
+    const sel = state.variantSel[e.id];
+    return d.byId.get(sel ?? e.id) ?? null;
+  };
+  const setVariant = (baseId: string, journeyId: string) => state.setVariant(baseId, journeyId);
   /** The journey id actually displayed for a base id (its selected variant, else itself). */
-  displayedId(baseId: string) { return this.s.variantSel[baseId] ?? baseId; }
-  steps() { return this.curJourney()?.steps ?? []; }
-  selIndex() { return this.steps().findIndex((n) => n.id === this.s.selectedStepId); }
+  const displayedId = (baseId: string) => state.variantSel[baseId] ?? baseId;
+  const steps = () => curJourney()?.steps ?? [];
+  const selIndex = () => steps().findIndex((n) => n.id === state.selectedStepId);
 
-  enterJourney(id: string) { this.s.enterJourney(id); }
+  const enterJourney = (id: string) => state.enterJourney(id);
   /** Enter a nested journey with its full caller chain (rail tree click) so
    *  breadcrumbs, Return chips, and the persona lens see the real call stack. */
-  enterPath(ids: string[]) { this.s.enterPath(ids); }
-  /** Apply a decoded location (URL / back-forward), trimming ids that no longer
-   *  exist so a stale or shared link degrades gracefully instead of showing nothing. */
-  restoreLocation(loc: Loc) { this.s.restoreLocation(loc); }
-  stepInto(subId: string, callerNode: string) { this.s.stepInto(subId, callerNode); }
-  goCrumb(k: number) { this.s.goCrumb(k); }
-  selectNode(id: string) { this.s.selectNode(id); }
-  setPersona(id: string) { this.s.togglePersona(id); }
-  toggleTheme() { this.s.toggleTheme(); }
+  const enterPath = (ids: string[]) => state.enterPath(ids);
+  const stepInto = (subId: string, callerNode: string) => state.stepInto(subId, callerNode);
+  const goCrumb = (k: number) => state.goCrumb(k);
+  const selectNode = (id: string) => state.selectNode(id);
+  const setPersona = (id: string) => state.togglePersona(id);
+  const toggleTheme = () => state.toggleTheme();
   /** Copy a link to the exact current view (URL already encodes the location). */
-  async copyLink() {
+  const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
-      this.s.setLinkCopied(true);
-      window.setTimeout(() => this.s.setLinkCopied(false), 1400);
+      state.setLinkCopied(true);
+      window.setTimeout(() => store.getState().setLinkCopied(false), 1400);
     } catch {
-      this.s.setPrompt(window.location.href); // clipboard blocked → manual-copy overlay
+      state.setPrompt(window.location.href); // clipboard blocked → manual-copy overlay
     }
-  }
+  };
 
-  private canvasEl = React.createRef<HTMLDivElement>();
   /** Export the visible canvas (chain map or current journey) as a framed 2x PNG:
    *  header + background grid + centered padding + legend, per the export-options.
    *  The heavy DOM assembly lives in export.ts; here we just supply theme + meta. */
-  async exportPng() {
-    const el = this.canvasEl.current;
+  const exportPng = async () => {
+    const el = canvasEl.current;
     if (!el) return;
-    const vars: Record<string, string> = { ...THEMES[this.s.theme], accent: this.props.accent || THEMES[this.s.theme].accent };
-    const journey = this.curJourney();
-    const project = this.props.data.manifest?.project ?? 'codestory';
+    const vars: Record<string, string> = { ...THEMES[state.theme], accent: props.accent || THEMES[state.theme].accent };
+    const journey = curJourney();
+    const project = props.data.manifest?.project ?? 'codestory';
     const flowName = journey
       ? `${journey.title}${journey.variantOf && journey.variantLabel ? ` — ${journey.variantLabel}` : ''}`
       : 'Root';
     const meta = journey
       ? { title: flowName, subtitle: portsSummary(journey), legend: summarize(journey.steps) }
-      : { title: `${project} — Root`, subtitle: `${this.d().order.length} journeys · ${this.props.data.manifest?.personas?.length ?? 0} personas`, legend: `${this.d().order.length} journeys` };
-    const dataUrl = await composeExportPng(el, vars, meta, this.s.exportOpts);
+      : { title: `${project} — Root`, subtitle: `${d.order.length} journeys · ${props.data.manifest?.personas?.length ?? 0} personas`, legend: `${d.order.length} journeys` };
+    const dataUrl = await composeExportPng(el, vars, meta, state.exportOpts);
     const a = document.createElement('a');
     a.href = dataUrl;
     // every file leads with the app name, then the flow, then the date: "<app> — <flow> - DD-MM-YYYY.png"
@@ -518,101 +530,57 @@ export class App extends React.Component<AppProps> {
     const date = `${p2(n.getDate())}-${p2(n.getMonth() + 1)}-${n.getFullYear()}`;
     a.download = `${`${project} — ${flowName} - ${date}`.replace(/[\\/:*?"<>|]/g, '-')}.png`; // filesystem-safe
     a.click();
-    this.s.closeExport();
-  }
-  toggleFlow() { this.s.toggleFlow(); }
+    state.closeExport();
+  };
+  const toggleFlow = () => state.toggleFlow();
 
-  step(dir: number) {
-    const ns = this.steps();
+  const step = (dir: number) => {
+    const ns = steps();
     if (!ns.length) return;
-    let i = this.selIndex();
+    let i = selIndex();
     if (i < 0) i = 0;
     const ni = Math.max(0, Math.min(ns.length - 1, i + dir));
-    this.s.selectNode(ns[ni]!.id);
-  }
-  hop(nextId: string) { this.s.hop(nextId); }
+    state.selectNode(ns[ni]!.id);
+  };
+  const hop = (nextId: string) => state.hop(nextId);
 
-  returnToParent() { this.s.returnToParent(); }
+  const returnToParent = () => state.returnToParent();
 
-  continueTarget(): { label: string; onClick: () => void } | null {
-    const ns = this.steps();
-    const cur = ns[this.selIndex()];
-    const journey = this.curJourney();
+  const continueTarget = (): { label: string; onClick: () => void } | null => {
+    const ns = steps();
+    const cur = ns[selIndex()];
+    const journey = curJourney();
     if (!cur || cur.type !== 'exit' || !journey) return null;
-    const e = this.curEntry();
+    const e = curEntry();
     if (e?.callerJourney && e.callerNode) {
-      const parent = this.d().byId.get(this.displayedId(e.callerJourney));
+      const parent = d.byId.get(displayedId(e.callerJourney));
       const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
       const returnNode = parent?.steps.find((n) => n.id === returnEdge?.to);
-      return { label: `Return → ${returnNode ? stepTitle(returnNode) : parent?.title ?? 'parent'}`, onClick: () => this.returnToParent() };
+      return { label: `Return → ${returnNode ? stepTitle(returnNode) : parent?.title ?? 'parent'}`, onClick: () => returnToParent() };
     }
     const link = journey.links.find((l) => l.exit === cur.port);
-    const next = link ? this.d().byId.get(link.journey) : null;
-    if (next) return { label: `Continue → ${next.title}`, onClick: () => this.hop(next.id) };
+    const next = link ? d.byId.get(link.journey) : null;
+    if (next) return { label: `Continue → ${next.title}`, onClick: () => hop(next.id) };
     return null;
-  }
-
-  // ── drag (click vs drag disambiguated by 3px threshold) ──
-  // Pointer Events so mouse, touch, and pen all work: tap = select/open, drag =
-  // move. setPointerCapture keeps the gesture bound to the card even if the finger
-  // slides off it; captured events still bubble to the window listeners below.
-
-  startDrag(kind: 'map' | 'step', id: string, key: string, baseX: number, baseY: number, e: React.PointerEvent) {
-    if (e.button !== 0) return; // primary button / primary touch only
-    e.preventDefault();
-    const startX = e.clientX, startY = e.clientY, pointerId = e.pointerId;
-    const target = e.currentTarget as HTMLElement;
-    try { target.setPointerCapture(pointerId); } catch { /* capture unsupported — window listeners still work */ }
-    let moved = false;
-    const move = (ev: PointerEvent) => {
-      if (ev.pointerId !== pointerId) return;
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      if (!moved && Math.abs(dx) + Math.abs(dy) > 3) moved = true;
-      if (!moved) return;
-      // no lower clamp — a step must be draggable left/up too, not pinned at the
-      // canvas origin (the old Math.max(0,…) stopped any leftward move dead at x=0)
-      const p = { x: baseX + dx, y: baseY + dy };
-      if (kind === 'map') this.s.setMapPos(key, p);
-      else this.s.setStepPos(key, p);
-    };
-    const up = (ev: PointerEvent) => {
-      if (ev.pointerId !== pointerId) return;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-      try { target.releasePointerCapture(pointerId); } catch { /* already released */ }
-      if (moved) return;
-      if (kind === 'map') { this.enterJourney(id); return; }
-      this.selectNode(id);
-      // notes hub open = annotate mode: a click also opens the note editor for this step
-      const journey = this.curJourney();
-      if (this.s.notesOpen && journey) this.s.openNotePopover(journey.id, id);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
-  }
+  };
 
   // ── render ──
-
-  render() {
-    const t: Record<string, string> = { ...THEMES[this.s.theme], accent: this.props.accent || THEMES[this.s.theme].accent };
+  const t: Record<string, string> = { ...THEMES[state.theme], accent: props.accent || THEMES[state.theme].accent };
     const rootStyle: Record<string, string> = {};
     Object.keys(t).forEach((k) => { rootStyle['--' + k] = t[k]!; });
     Object.assign(rootStyle, css("background:var(--bg);color:var(--fg);height:100vh;width:100%;display:flex;flex-direction:column;overflow:hidden;position:relative;font-size:14px;") as Record<string, string>, { fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif', WebkitFontSmoothing: 'antialiased' });
 
-    const d = this.d();
-    const isMap = this.s.view === 'map';
-    const isJourney = this.s.view === 'journey';
-    const vertical = this.s.flow === 'vertical';
-    const { isNarrow, drawerOpen } = this.s;
-    const topJourneyId = this.s.stack[0]?.id ?? null;
-    const persona = this.s.persona ? d.personas.find((j) => j.id === this.s.persona) ?? null : null;
+    const isMap = state.view === 'map';
+    const isJourney = state.view === 'journey';
+    const vertical = state.flow === 'vertical';
+    const { isNarrow, drawerOpen } = state;
+    const topJourneyId = state.stack[0]?.id ?? null;
+    const persona = state.persona ? d.personas.find((j) => j.id === state.persona) ?? null : null;
     const personaSet = persona ? new Set(persona.journeys) : null;
-    const q = this.s.query.trim().toLowerCase();
+    const q = state.query.trim().toLowerCase();
 
     // chain map
-    const chainLayout = this.layout('__chain', d.order.map((id) => ({ id, w: CARD_W, h: CARD_H })), d.chainEdges.map((e) => [e[0], e[1]] as [string, string]), vertical, { main: vertical ? 80 : 106, cross: vertical ? 66 : 50 });
+    const chainLayout = layout('__chain', d.order.map((id) => ({ id, w: CARD_W, h: CARD_H })), d.chainEdges.map((e) => [e[0], e[1]] as [string, string]), vertical, { main: vertical ? 80 : 106, cross: vertical ? 66 : 50 });
     const mapRects: Record<string, Rect> = {};
     const mapCards = d.order.map((id, idx) => {
       const b = d.byId.get(id)!;
@@ -622,7 +590,7 @@ export class App extends React.Component<AppProps> {
       const built = b.steps.filter((n) => n.status === 'built').length;
       const mkey = (vertical ? 'v' : 'h') + ':' + id;
       const base = chainLayout.pos[id] ?? { x: 32, y: 32 };
-      const mp = this.s.mapPos[mkey];
+      const mp = state.mapPos[mkey];
       const px = mp?.x ?? base.x, py = mp?.y ?? base.y;
       mapRects[id] = { x: px, y: py, w: CARD_W, h: CARD_H };
       const portStyle = (edge: 'left' | 'right' | 'top' | 'bottom'): React.CSSProperties => ({
@@ -638,7 +606,7 @@ export class App extends React.Component<AppProps> {
         statusText: statusMeta(b.status).label, statusStyle: statusPill(b.status),
         style: { position: 'absolute', left: px, top: py, width: CARD_W, height: CARD_H, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', boxShadow: 'var(--shadow)', padding: '13px 15px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', opacity: dim ? 0.34 : 1, transition: 'opacity 200ms ease, box-shadow 160ms ease', outline: inJ && personaSet ? '1.5px solid var(--accent)' : 'none', outlineOffset: -1.5 } as React.CSSProperties,
         entryPort: portStyle(vertical ? 'top' : 'left'), exitPort: portStyle(vertical ? 'bottom' : 'right'),
-        onPointerDown: (e: React.PointerEvent) => this.startDrag('map', id, mkey, px, py, e),
+        onPointerDown: (e: React.PointerEvent) => startDrag('map', id, mkey, px, py, e),
       };
     });
     // shift so a dragged-left card stays reachable, then size the canvas to fit
@@ -652,10 +620,10 @@ export class App extends React.Component<AppProps> {
 
     // personas rail
     const personaList = d.personas.map((j) => {
-      const active = this.s.persona === j.id;
+      const active = state.persona === j.id;
       return {
         id: j.id, label: j.title, count: `${j.journeys.length}/${d.order.length}`,
-        onClick: () => this.setPersona(j.id),
+        onClick: () => setPersona(j.id),
         dotStyle: { width: 8, height: 8, borderRadius: 2, background: active ? 'var(--accent)' : 'var(--mute)' } as React.CSSProperties,
         style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '8px 10px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', textAlign: 'left' } as React.CSSProperties,
       };
@@ -685,17 +653,17 @@ export class App extends React.Component<AppProps> {
       const b = d.byId.get(id);
       if (!b) return null;
       const subs = (d.subsByJourney.get(id) ?? []).filter((s) => !visited.has(s));
-      const open = this.s.railOpen[path] ?? true; // expanded by default — visible sub-flows are what makes the rail self-explanatory
-      const active = this.curEntry()?.id === id; // highlight the journey being viewed, not the stack root
+      const open = state.railOpen[path] ?? true; // expanded by default — visible sub-flows are what makes the rail self-explanatory
+      const active = curEntry()?.id === id; // highlight the journey being viewed, not the stack root
       return (
         <div key={path} style={css('display:flex;flex-direction:column;gap:2px;')}>
           <div style={css('display:flex;align-items:center;gap:0;')}>
             <button
-              onClick={() => this.s.toggleRail(path)}
+              onClick={() => state.toggleRail(path)}
               data-tip={subs.length ? (open ? 'Collapse sub-flows' : 'Show sub-flows') : undefined} data-tip-align="left"
               style={{ flex: '0 0 auto', width: 20, height: 28, border: 'none', background: 'none', color: 'var(--dim)', fontSize: 16, lineHeight: 1, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: subs.length ? 'pointer' : 'default', visibility: subs.length ? 'visible' : 'hidden' }}
             >{open ? <Ic n="chevron-down" size={14} /> : <Ic n="chevron-right" size={14} />}</button>
-            <button onClick={() => { this.enterPath(path.split(PATH_SEP)); this.closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
+            <button onClick={() => { enterPath(path.split(PATH_SEP)); closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 auto', minWidth: 0, padding: '7px 10px 7px 4px', borderRadius: 8, border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'var(--accentSoft)' : 'transparent', color: 'var(--fg)', opacity: inJ ? 1 : 0.45, cursor: 'pointer' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${b.status})`, flex: '0 0 auto', opacity: inJ ? 1 : 0.4 }}></span>
               <span style={css('font-size:12.5px;font-weight:500;flex:1 1 auto;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{b.title}</span>
               <span style={badgeStyle}>{badge}</span>
@@ -716,14 +684,14 @@ export class App extends React.Component<AppProps> {
         : 'Pick a persona to highlight their path, or open a journey. Journeys chain exit → entry into one continuous movie.';
 
     // journey view — `journey` is the displayed version; ghosts come from the others
-    const baseEntryId = this.curEntry()?.id ?? '';
+    const baseEntryId = curEntry()?.id ?? '';
     const baseJourney = d.byId.get(baseEntryId) ?? null;
     const variants = d.variantsByBase.get(baseEntryId) ?? [];
     const versions = baseJourney ? [baseJourney, ...variants] : [];
-    const journey = this.curJourney();
+    const journey = curJourney();
     const journeyId = journey?.id ?? '';
-    const ns = this.steps();
-    const selI = this.selIndex();
+    const ns = steps();
+    const selI = selIndex();
     const activeSet = activePrefix(ns, selI);
 
     // with variants, lay out the UNION of all versions so shared steps don't
@@ -735,13 +703,13 @@ export class App extends React.Component<AppProps> {
     const journeyGaps = { main: vertical ? 64 : 84, cross: vertical ? 48 : 28 };
     const lay = journey
       ? hasVariants
-        ? this.layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionSteps.map(sizedStep), unionEdges, vertical, journeyGaps)
-        : this.layout(journeyId, journey.steps.map(sizedStep), journey.edges.map((e) => [e.from, e.to] as [string, string]), vertical, journeyGaps)
+        ? layout(`${baseEntryId}:union:${versions.map((v) => v.id).join(',')}`, unionSteps.map(sizedStep), unionEdges, vertical, journeyGaps)
+        : layout(journeyId, journey.steps.map(sizedStep), journey.edges.map((e) => [e.from, e.to] as [string, string]), vertical, journeyGaps)
       : null;
     const eff = (n: ApiStep) => {
       const base = lay?.pos[n.id] ?? { x: 32, y: 28 };
       const key = `${journeyId}:${vertical ? 'v' : 'h'}:${n.id}`;
-      const o = this.s.stepPos[key];
+      const o = state.stepPos[key];
       return { x: o?.x ?? base.x, y: o?.y ?? base.y, key };
     };
     const journeyRects: Record<string, Rect> = {};
@@ -766,16 +734,16 @@ export class App extends React.Component<AppProps> {
     const ghostEdges: EdgeTuple[] = hasVariants ? unionEdges.filter(([a, b]) => !activeEdgeKeys.has(`${a}>${b}`)) : [];
 
     const journeySteps = ns.map((n) => {
-      const isSel = n.id === this.s.selectedStepId;
+      const isSel = n.id === state.selectedStepId;
       const kind = stepKind(n);
       const p = eff(n);
       const status = n.status ?? 'planned';
       return {
         id: n.id, title: stepTitle(n), typeText: TYPE_TEXT[kind]!, glyph: GLYPHS[kind]!, isSubflow: kind === 'subflow', subJourney: n.journey, diff: stepDiff(n),
-        noteCount: journeyId ? this.openNotesFor(journeyId, n.id).length : 0,
+        noteCount: journeyId ? openNotesFor(journeyId, n.id).length : 0,
         dotStyle: { width: 8, height: 8, borderRadius: '50%', background: `var(--${status})`, flex: '0 0 auto' } as React.CSSProperties,
         style: { position: 'absolute', left: p.x + jf.dx, top: p.y + jf.dy, width: STEP_W, minHeight: STEP_H, borderRadius: 10, border: kind === 'decision' ? '1.5px dashed var(--borderStrong)' : `1px solid ${kind === 'exit' ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--surface2)' : kind === 'exit' ? 'var(--accentSoft)' : 'var(--surface)', boxShadow: isSel ? '0 0 0 2px var(--accent)' : 'var(--shadow)', padding: '9px 11px', display: 'flex', flexDirection: 'column', cursor: 'grab', userSelect: 'none', touchAction: 'none', transition: 'box-shadow 150ms ease, background 150ms ease', zIndex: isSel ? 3 : 2 } as React.CSSProperties,
-        onPointerDown: (e: React.PointerEvent) => this.startDrag('step', n.id, p.key, p.x, p.y, e),
+        onPointerDown: (e: React.PointerEvent) => startDrag('step', n.id, p.key, p.x, p.y, e),
       };
     });
     // vertical: hug content width so margin:auto centers the flow; horizontal keeps a
@@ -783,26 +751,26 @@ export class App extends React.Component<AppProps> {
     const baseW = vertical ? (lay?.w ?? 480) : Math.max(lay?.w ?? 480, 480);
     const journeyDims = lay ? { w: Math.max(baseW, jf.w), h: Math.max(360, jf.h) } : { w: 480, h: 360 };
     const journeyEdgeTuples: EdgeTuple[] = (journey?.edges ?? []).map((e) => [e.from, e.to, e.label ?? e.when]);
-    const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, this.s.selectedStepId, (id) => this.selectNode(id), vertical) : null;
+    const journeyEdgesEl = journey ? edgesSvg(journeyEdgeTuples, journeyRects, journeyDims, activeSet, state.selectedStepId, (id) => selectNode(id), vertical) : null;
 
     // crumbs
     const crumbBtn = (last: boolean): React.CSSProperties => ({ border: 'none', background: 'none', padding: '3px 6px', borderRadius: 5, color: last ? 'var(--fg)' : 'var(--dim)', fontWeight: last ? 600 : 500, fontSize: 12.5, cursor: last ? 'default' : 'pointer' });
-    const crumbs: Array<{ label: string; onClick: () => void; style: React.CSSProperties }> = [{ label: ROOT_LABEL, onClick: () => this.goCrumb(0), style: crumbBtn(false) }];
+    const crumbs: Array<{ label: string; onClick: () => void; style: React.CSSProperties }> = [{ label: ROOT_LABEL, onClick: () => goCrumb(0), style: crumbBtn(false) }];
     const crumbSep = (): React.CSSProperties => ({ border: 'none', background: 'none', color: 'var(--mute)', fontSize: 12, padding: '0 1px', cursor: 'default' });
-    const stackLen = this.s.stack.length;
-    this.s.stack.forEach((entry, i) => {
+    const stackLen = state.stack.length;
+    state.stack.forEach((entry, i) => {
       const last = i === stackLen - 1;
       // narrow: collapse the middle of a deep path to a single "…" (up one level)
       // so a long call stack never widens the header past the viewport
       if (isNarrow && stackLen > 2 && i > 0 && !last) {
         if (i === 1) {
           crumbs.push({ label: '/', onClick: () => {}, style: crumbSep() });
-          crumbs.push({ label: '…', onClick: () => this.goCrumb(stackLen - 1), style: crumbBtn(false) });
+          crumbs.push({ label: '…', onClick: () => goCrumb(stackLen - 1), style: crumbBtn(false) });
         }
         return;
       }
       crumbs.push({ label: '/', onClick: () => {}, style: crumbSep() });
-      crumbs.push({ label: d.byId.get(entry.id)?.title ?? entry.id, onClick: () => this.goCrumb(i + 1), style: crumbBtn(last) });
+      crumbs.push({ label: d.byId.get(entry.id)?.title ?? entry.id, onClick: () => goCrumb(i + 1), style: crumbBtn(last) });
     });
 
     // transport + detail
@@ -810,14 +778,14 @@ export class App extends React.Component<AppProps> {
     const narration = selNode ? selNode.note ?? '' : journey ? portsSummary(journey) : '';
     const stepLabel = ns.length ? `${(selI < 0 ? 1 : selI + 1)} / ${ns.length}` : '';
     const pct = ns.length ? Math.round(((selI < 0 ? 0 : selI + 1) / ns.length) * 100) : 0;
-    const cont = this.continueTarget();
+    const cont = continueTarget();
     const atStart = selI <= 0;
     const atEnd = selI >= ns.length - 1;
     const navBtn = (disabled: boolean): React.CSSProperties => ({ width: 32, height: 32, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: disabled ? 'var(--mute)' : 'var(--dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' });
     const selStatus = selNode?.status ?? 'planned';
     // honest rule: criteria read as verified only when the step is built (has tests)
     const chk = (_i: number) => selStatus === 'built';
-    const detailShown = isJourney && !!selNode && this.s.detailOpen;
+    const detailShown = isJourney && !!selNode && state.detailOpen;
     const lensBlocked = isJourney && !!personaSet && !!topJourneyId && !personaSet.has(topJourneyId);
     // left rail: inline 220px column normally; on narrow it's an overlay drawer
     // (absolute within the content row) that slides in over a tap-to-close backdrop
@@ -829,23 +797,23 @@ export class App extends React.Component<AppProps> {
       <div style={rootStyle as React.CSSProperties}>
         <div style={{ ...css('height:52px;flex:0 0 auto;display:flex;align-items:center;border-bottom:1px solid var(--border);background:var(--surface);z-index:20;'), gap: isNarrow ? 8 : 16, padding: isNarrow ? '0 10px' : '0 16px' }}>
           {isNarrow && (
-            <button data-tip="Menu" data-tip-align="left" onClick={() => this.s.toggleDrawer()} style={css('width:30px;height:30px;flex:0 0 auto;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:15px;display:flex;align-items:center;justify-content:center;')}><Ic n="menu" size={17} /></button>
+            <button data-tip="Menu" data-tip-align="left" onClick={() => state.toggleDrawer()} style={css('width:30px;height:30px;flex:0 0 auto;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:15px;display:flex;align-items:center;justify-content:center;')}><Ic n="menu" size={17} /></button>
           )}
           <div style={{ ...css('display:flex;align-items:center;gap:9px;'), flex: '0 0 auto' }}>
             <div style={css('width:15px;height:15px;border-radius:4px;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft);')}></div>
             <span style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>codestory</span>
             {!isNarrow && (
-              <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{this.s.data.manifest?.project ?? 'codestory present'}</span>
+              <span style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);background:var(--inset);border:1px solid var(--border);padding:2px 7px;border-radius:5px;")}>{state.data.manifest?.project ?? 'codestory present'}</span>
             )}
-            {!isNarrow && (this.s.data.issues?.length ?? 0) > 0 && (
-              <span title={this.s.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {this.s.data.issues!.length} validate issue(s) — journeys may be missing</span>
+            {!isNarrow && (state.data.issues?.length ?? 0) > 0 && (
+              <span title={state.data.issues!.map((i) => `${i.file}: ${i.message}`).join('\n')} style={css("font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--drifted);border:1px solid var(--drifted);padding:2px 7px;border-radius:5px;cursor:help;")}>⚠ {state.data.issues!.length} validate issue(s) — journeys may be missing</span>
             )}
           </div>
 
           <div style={css('flex:1 1 auto;min-width:0;display:flex;justify-content:center;overflow:hidden;')}>
             {isMap && (
               <div style={{ ...css('position:relative;'), width: isNarrow ? '100%' : 320, maxWidth: isNarrow ? '100%' : '42vw' }}>
-                <input value={this.s.query} onChange={(e) => this.s.setQuery(e.target.value)} placeholder="Search journeys & steps" style={{ ...css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;outline:none;'), fontSize: isNarrow ? 16 : 12.5 }} />
+                <input value={state.query} onChange={(e) => state.setQuery(e.target.value)} placeholder="Search journeys & steps" style={{ ...css('width:100%;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--fg);padding:0 10px 0 28px;outline:none;'), fontSize: isNarrow ? 16 : 12.5 }} />
                 <span style={css('position:absolute;left:9px;top:7px;color:var(--mute);font-size:13px;')}>⌕</span>
               </div>
             )}
@@ -864,62 +832,62 @@ export class App extends React.Component<AppProps> {
                 <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
               </div>
             )}
-            <button data-tip={this.s.notesOpen ? 'Notes hub open — click a step to note it' : 'Notes — annotate steps, copy as prompt'} onClick={() => this.s.toggleNotes()} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.s.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.s.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.s.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <button data-tip={state.notesOpen ? 'Notes hub open — click a step to note it' : 'Notes — annotate steps, copy as prompt'} onClick={() => state.toggleNotes()} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${state.notesOpen ? 'var(--accent)' : 'var(--border)'}`, background: state.notesOpen ? 'var(--accentSoft)' : 'var(--inset)', color: state.notesOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Ic n="pencil" size={15} />
-              {this.openNotes().length > 0 && (
-                <span style={css("position:absolute;top:-5px;right:-5px;min-width:14px;height:14px;border-radius:7px;background:var(--accent);color:var(--accentFg);font-size:9px;font-weight:700;line-height:14px;text-align:center;padding:0 3px;font-family:'JetBrains Mono',monospace;")}>{this.openNotes().length}</span>
+              {openNotes().length > 0 && (
+                <span style={css("position:absolute;top:-5px;right:-5px;min-width:14px;height:14px;border-radius:7px;background:var(--accent);color:var(--accentFg);font-size:9px;font-weight:700;line-height:14px;text-align:center;padding:0 3px;font-family:'JetBrains Mono',monospace;")}>{openNotes().length}</span>
               )}
             </button>
-            <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => this.toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? <Ic n="arrows-ud" size={15} /> : <Ic n="arrows-lr" size={15} />}</button>
-            <button data-tip={this.s.linkCopied ? 'Link copied' : 'Copy link to this view'} onClick={() => void this.copyLink()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n={this.s.linkCopied ? 'check' : 'link'} size={15} /></button>
-            <button data-tip="Export view as PNG" onClick={() => this.s.toggleExport()} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${this.s.exportOpen ? 'var(--accent)' : 'var(--border)'}`, background: this.s.exportOpen ? 'var(--accentSoft)' : 'var(--inset)', color: this.s.exportOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic n="download" size={15} /></button>
-            <button data-tip={this.s.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => this.toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{this.s.theme === 'dark' ? <Ic n="sun" size={15} /> : <Ic n="moon" size={15} />}</button>
+            <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? <Ic n="arrows-ud" size={15} /> : <Ic n="arrows-lr" size={15} />}</button>
+            <button data-tip={state.linkCopied ? 'Link copied' : 'Copy link to this view'} onClick={() => void copyLink()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n={state.linkCopied ? 'check' : 'link'} size={15} /></button>
+            <button data-tip="Export view as PNG" onClick={() => state.toggleExport()} style={{ position: 'relative', width: 30, height: 30, borderRadius: 7, border: `1px solid ${state.exportOpen ? 'var(--accent)' : 'var(--border)'}`, background: state.exportOpen ? 'var(--accentSoft)' : 'var(--inset)', color: state.exportOpen ? 'var(--accent)' : 'var(--dim)', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic n="download" size={15} /></button>
+            <button data-tip={state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => toggleTheme()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{state.theme === 'dark' ? <Ic n="sun" size={15} /> : <Ic n="moon" size={15} />}</button>
           </div>
         </div>
 
-        {this.s.notesOpen && (
+        {state.notesOpen && (
           <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 340, maxHeight: isNarrow ? '60vh' : '70vh' }}>
             <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
               <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Notes</div>
               <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Click any step on a journey to leave a change-note.</div>
             </div>
             <div style={css('flex:1 1 auto;overflow-y:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px;')}>
-              {this.allNotes().length === 0 && (
+              {allNotes().length === 0 && (
                 <div style={css('padding:14px 6px;font-size:11.5px;color:var(--mute);text-align:center;')}>No notes yet.</div>
               )}
-              {this.allNotes().map((n) => {
-                const nb = this.d().byId.get(n.journey);
+              {allNotes().map((n) => {
+                const nb = d.byId.get(n.journey);
                 const nn = n.step ? nb?.steps.find((x) => x.id === n.step) : undefined;
                 const applied = n.status === 'applied';
                 return (
                   <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 9px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', opacity: applied ? 0.55 : 1 }}>
                     <div style={css('display:flex;align-items:center;gap:7px;')}>
-                      <button onClick={() => this.goToNote(n)} title="Go to step" style={css("border:none;background:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{nb?.title ?? n.journey}{nn ? ` › ${stepTitle(nn)}` : ''}</button>
+                      <button onClick={() => goToNote(n)} title="Go to step" style={css("border:none;background:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{nb?.title ?? n.journey}{nn ? ` › ${stepTitle(nn)}` : ''}</button>
                       <span style={{ ...statusPill(applied ? 'built' : 'drifted'), marginLeft: 'auto', flex: '0 0 auto' }}>{n.status}</span>
                     </div>
                     <div style={{ fontSize: 12, lineHeight: 1.45, color: 'var(--fg)', textDecoration: applied ? 'line-through' : 'none' }}>{n.text}</div>
                     <div style={css('display:flex;gap:6px;justify-content:flex-end;')}>
                       {!applied && (
-                        <button onClick={() => this.applyNote(n.id)} title="Mark applied" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--built);background:transparent;color:var(--built);font-size:10.5px;font-weight:600;cursor:pointer;')}>✓ applied</button>
+                        <button onClick={() => applyNote(n.id)} title="Mark applied" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--built);background:transparent;color:var(--built);font-size:10.5px;font-weight:600;cursor:pointer;')}>✓ applied</button>
                       )}
-                      <button onClick={() => this.deleteNote(n.id)} data-tip="Delete note" data-tip-pos="up" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--borderStrong);background:transparent;color:var(--dim);font-size:10.5px;font-weight:600;cursor:pointer;')}><Ic n="trash" size={13} /></button>
+                      <button onClick={() => deleteNote(n.id)} data-tip="Delete note" data-tip-pos="up" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--borderStrong);background:transparent;color:var(--dim);font-size:10.5px;font-weight:600;cursor:pointer;')}><Ic n="trash" size={13} /></button>
                     </div>
                   </div>
                 );
               })}
             </div>
-            {this.allNotes().length > 0 && (
+            {allNotes().length > 0 && (
               <div style={css('padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;')}>
-                {this.openNotes().length > 0 && (
-                  <button onClick={() => void this.copyPrompt()} style={css('flex:1 1 auto;height:30px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:11.5px;font-weight:600;cursor:pointer;')}>{this.s.copied ? '✓ Copied' : `⧉ Copy ${this.openNotes().length} as prompt`}</button>
+                {openNotes().length > 0 && (
+                  <button onClick={() => void copyPrompt()} style={css('flex:1 1 auto;height:30px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:11.5px;font-weight:600;cursor:pointer;')}>{state.copied ? '✓ Copied' : `⧉ Copy ${openNotes().length} as prompt`}</button>
                 )}
-                <button onClick={() => this.clearNotes()} title="Delete all notes" style={css('flex:0 0 auto;height:30px;padding:0 11px;border-radius:7px;border:1px solid var(--borderStrong);background:var(--inset);color:var(--dim);font-size:11.5px;font-weight:600;cursor:pointer;')}>Clear all</button>
+                <button onClick={() => clearNotes()} title="Delete all notes" style={css('flex:0 0 auto;height:30px;padding:0 11px;border-radius:7px;border:1px solid var(--borderStrong);background:var(--inset);color:var(--dim);font-size:11.5px;font-weight:600;cursor:pointer;')}>Clear all</button>
               </div>
             )}
           </div>
         )}
 
-        {this.s.exportOpen && (
+        {state.exportOpen && (
           <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 280 }}>
             <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
               <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Export PNG</div>
@@ -927,9 +895,9 @@ export class App extends React.Component<AppProps> {
             </div>
             <div style={css('padding:8px 10px;display:flex;flex-direction:column;gap:2px;')}>
               {EXPORT_TOGGLES.map(({ key, label }) => {
-                const on = this.s.exportOpts[key];
+                const on = state.exportOpts[key];
                 return (
-                  <button key={key} onClick={() => this.s.toggleExportOpt(key)} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
+                  <button key={key} onClick={() => state.toggleExportOpt(key)} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
                     <span style={{ flex: '0 0 auto', width: 16, height: 16, borderRadius: 5, border: `1px solid ${on ? 'var(--accent)' : 'var(--borderStrong)'}`, background: on ? 'var(--accent)' : 'transparent', color: 'var(--accentFg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <Ic n="check" size={11} />}</span>
                     <span style={css('font-size:12.5px;')}>{label}</span>
                   </button>
@@ -937,14 +905,14 @@ export class App extends React.Component<AppProps> {
               })}
             </div>
             <div style={css('padding:10px 12px;border-top:1px solid var(--border);')}>
-              <button onClick={() => void this.exportPng()} style={css('width:100%;height:32px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12px;font-weight:650;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;')}><Ic n="download" size={14} />Export PNG</button>
+              <button onClick={() => void exportPng()} style={css('width:100%;height:32px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12px;font-weight:650;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;')}><Ic n="download" size={14} />Export PNG</button>
             </div>
           </div>
         )}
 
         <div style={css('flex:1 1 auto;display:flex;min-height:0;position:relative;')}>
           {isNarrow && drawerOpen && (
-            <div onPointerDown={this.closeDrawer} style={css('position:absolute;inset:0;z-index:38;background:var(--overlay);animation:fadeZoom 160ms ease;')}></div>
+            <div onPointerDown={closeDrawer} style={css('position:absolute;inset:0;z-index:38;background:var(--overlay);animation:fadeZoom 160ms ease;')}></div>
           )}
           <div style={railStyle}>
             <div>
@@ -972,7 +940,7 @@ export class App extends React.Component<AppProps> {
               </div>
               <div style={css('display:flex;flex-direction:column;gap:2px;')}>
                 {/* Root is "selected" only when it's truly the whole map — view=map AND no persona lens; one active thing at a time */}
-                <button onClick={() => { this.goCrumb(0); this.closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !persona ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !persona ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                <button onClick={() => { goCrumb(0); closeDrawer(); }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, border: `1px solid ${isMap && !persona ? 'var(--accent)' : 'var(--border)'}`, background: isMap && !persona ? 'var(--accentSoft)' : 'var(--inset)', color: 'var(--fg)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
                   <span style={css('display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:var(--accentSoft);color:var(--accent);font-size:11px;flex:0 0 auto;')}>⊞</span>
                   <span style={css('flex:1 1 auto;text-align:left;')}>{ROOT_LABEL}</span>
                   <span style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--mute);")}>{isMap && !persona ? 'here' : 'root'}</span>
@@ -989,7 +957,7 @@ export class App extends React.Component<AppProps> {
           <div style={css('flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;')}>
             {isMap && (
               <div style={css('flex:1 1 auto;position:relative;overflow:auto;background:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;animation:fadeZoom 240ms ease;')}>
-                <div ref={this.canvasEl} style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: vertical ? '32px auto' : 32 }}>
+                <div ref={canvasEl} style={{ position: 'relative', width: mapDims.w, height: mapDims.h, margin: vertical ? '32px auto' : 32 }}>
                   <div style={css('position:absolute;left:0;top:0;')}>{chainEdgesEl}</div>
                   {mapCards.map((m) => (
                     <div key={m.id} data-export-step onPointerDown={m.onPointerDown} style={m.style}>
@@ -1018,27 +986,27 @@ export class App extends React.Component<AppProps> {
                       <div style={css('font-size:12.5px;color:var(--dim);line-height:1.55;margin-top:8px;')}>The <b style={css('color:var(--fg);font-weight:600;')}>{persona?.title}</b> lens doesn’t pass through <b style={css('color:var(--fg);font-weight:600;')}>{journey?.title}</b>. Pick a journey this persona actually uses:</div>
                       <div style={css('display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px;')}>
                         {(jJourneys ?? []).map((id, i) => (
-                          <button key={id} onClick={() => this.enterJourney(id)} style={css('display:flex;align-items:center;gap:8px;height:34px;padding:0 13px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>
+                          <button key={id} onClick={() => enterJourney(id)} style={css('display:flex;align-items:center;gap:8px;height:34px;padding:0 13px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>
                             <span style={css("font-family:'JetBrains Mono',monospace;font-size:10px;opacity:0.85;")}>{i + 1}</span>{d.byId.get(id)?.title ?? id}
                           </button>
                         ))}
                       </div>
-                      <button onClick={() => this.s.clearPersona()} style={css('margin-top:16px;border:none;background:none;color:var(--mute);font-size:11.5px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;')}>Clear lens instead</button>
+                      <button onClick={() => state.clearPersona()} style={css('margin-top:16px;border:none;background:none;color:var(--mute);font-size:11.5px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;')}>Clear lens instead</button>
                     </div>
                   </div>
                 )}
-                {hasVariants && isNarrow && !this.s.versionsOpen && (
+                {hasVariants && isNarrow && !state.versionsOpen && (
                   <button
-                    onClick={() => this.s.openVersions()}
+                    onClick={() => state.openVersions()}
                     style={css('position:absolute;right:12px;top:12px;z-index:8;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px;box-shadow:var(--shadow);')}
                   ><Ic n="branch" size={13} /> {journey?.variantOf ? journey.variantLabel ?? journey.id : 'Current'} <Ic n="chevron-down" size={13} /></button>
                 )}
-                {hasVariants && (!isNarrow || this.s.versionsOpen) && (
+                {hasVariants && (!isNarrow || state.versionsOpen) && (
                   <div style={{ ...css('position:absolute;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);overflow-y:auto;animation:slideUp 200ms ease;'), right: 14, left: isNarrow ? 12 : 'auto', maxHeight: isNarrow ? '45vh' : 'none' }}>
                     <div style={css('display:flex;align-items:center;')}>
                       <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
                       {isNarrow && (
-                        <button onClick={() => this.s.closeVersions()} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;')}><Ic n="x" size={15} /></button>
+                        <button onClick={() => state.closeVersions()} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;')}><Ic n="x" size={15} /></button>
                       )}
                     </div>
                     {versions.map((v) => (
@@ -1047,7 +1015,7 @@ export class App extends React.Component<AppProps> {
                           type="radio"
                           name="cs-version"
                           checked={journeyId === v.id}
-                          onChange={() => this.setVariant(baseEntryId, v.id)}
+                          onChange={() => setVariant(baseEntryId, v.id)}
                           style={{ accentColor: 'var(--accent)', margin: 0, cursor: 'pointer' }}
                         />
                         <span style={css('font-weight:550;')}>{v.variantOf ? v.variantLabel ?? v.id : 'Current'}</span>
@@ -1062,7 +1030,7 @@ export class App extends React.Component<AppProps> {
                     <div style={css('font-size:17px;font-weight:650;letter-spacing:-0.015em;')}>{journey?.title}</div>
                     <div style={css('font-size:12px;color:var(--dim);margin-top:2px;')}>{journey ? portsSummary(journey) : ''}</div>
                   </div>
-                  <div ref={this.canvasEl} style={{ position: 'relative', width: journeyDims.w, height: journeyDims.h, margin: vertical ? '64px auto 40px' : '64px 40px 40px' }}>
+                  <div ref={canvasEl} style={{ position: 'relative', width: journeyDims.w, height: journeyDims.h, margin: vertical ? '64px auto 40px' : '64px 40px 40px' }}>
                     {ghostEdges.length > 0 && (
                       <div style={css('position:absolute;left:0;top:0;opacity:0.22;')}>{edgesSvg(ghostEdges, journeyRects, journeyDims, null, null, null, vertical)}</div>
                     )}
@@ -1097,29 +1065,29 @@ export class App extends React.Component<AppProps> {
                         {n.isSubflow && (
                           <button
                             onPointerDown={(e) => e.stopPropagation()}
-                            onClick={(e) => { e.stopPropagation(); this.stepInto(n.subJourney!, n.id); }}
+                            onClick={(e) => { e.stopPropagation(); stepInto(n.subJourney!, n.id); }}
                             style={css('margin-top:7px;align-self:flex-start;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border:1px solid var(--accent);border-radius:5px;padding:2px 8px;display:flex;align-items:center;gap:4px;cursor:pointer;')}
                           >Step into ↘</button>
                         )}
                       </div>
                     ))}
-                    {this.s.notePopover && this.s.notePopover.journey === journeyId && journeyRects[this.s.notePopover.step] && (
+                    {state.notePopover && state.notePopover.journey === journeyId && journeyRects[state.notePopover.step] && (
                       <div
                         onPointerDown={(e) => e.stopPropagation()}
-                        style={{ position: 'absolute', left: journeyRects[this.s.notePopover.step]!.x, top: journeyRects[this.s.notePopover.step]!.y + journeyRects[this.s.notePopover.step]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
+                        style={{ position: 'absolute', left: journeyRects[state.notePopover.step]!.x, top: journeyRects[state.notePopover.step]!.y + journeyRects[state.notePopover.step]!.h + 8, zIndex: 30, width: 244, padding: 12, borderRadius: 10, border: '1px solid var(--accent)', background: 'var(--surface)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 9 }}
                       >
-                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {this.s.notePopover.step}</div>
+                        <div style={css("font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);")}>Note on {state.notePopover.step}</div>
                         <textarea
                           autoFocus
-                          value={this.s.noteDraft}
-                          onChange={(e) => this.s.setNoteDraft(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void this.saveNote(this.s.notePopover!.journey, this.s.notePopover!.step, this.s.noteDraft); } if (e.key === 'Escape') this.s.closeNotePopover(); }}
+                          value={state.noteDraft}
+                          onChange={(e) => state.setNoteDraft(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void saveNote(state.notePopover!.journey, state.notePopover!.step, state.noteDraft); } if (e.key === 'Escape') state.closeNotePopover(); }}
                           placeholder="What should change here?"
                           style={{ width: '100%', minHeight: 68, resize: 'vertical', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: '7px 9px', fontSize: isNarrow ? 16 : 12.5, fontFamily: 'inherit', outline: 'none' }}
                         />
                         <div style={css('display:flex;align-items:center;justify-content:flex-end;gap:7px;')}>
-                          <button onClick={() => this.s.cancelNote()} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
-                          <button onClick={() => void this.saveNote(this.s.notePopover!.journey, this.s.notePopover!.step, this.s.noteDraft)} disabled={!this.s.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: this.s.noteDraft.trim() ? 'pointer' : 'default', opacity: this.s.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
+                          <button onClick={() => state.cancelNote()} style={css('height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:12px;cursor:pointer;')}>Cancel</button>
+                          <button onClick={() => void saveNote(state.notePopover!.journey, state.notePopover!.step, state.noteDraft)} disabled={!state.noteDraft.trim()} style={{ height: 28, padding: '0 13px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--accentFg)', fontSize: 12, fontWeight: 600, cursor: state.noteDraft.trim() ? 'pointer' : 'default', opacity: state.noteDraft.trim() ? 1 : 0.5 }}>Save</button>
                         </div>
                       </div>
                     )}
@@ -1129,16 +1097,16 @@ export class App extends React.Component<AppProps> {
                   {(() => {
                     const detailToggle = (
                       <button
-                        data-tip={this.s.detailOpen ? 'Hide step detail' : 'Show step detail'}
+                        data-tip={state.detailOpen ? 'Hide step detail' : 'Show step detail'}
                         data-tip-pos="up"
-                        onClick={() => this.s.toggleDetail()}
+                        onClick={() => state.toggleDetail()}
                         style={{ ...css('border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);display:flex;align-items:center;justify-content:center;'), flex: '0 0 auto', marginLeft: 'auto', width: isNarrow ? 36 : 30, height: isNarrow ? 36 : 30 }}
-                      >{this.s.detailOpen ? <Ic n="chevron-down" size={isNarrow ? 19 : 16} /> : <Ic n="chevron-up" size={isNarrow ? 19 : 16} />}</button>
+                      >{state.detailOpen ? <Ic n="chevron-down" size={isNarrow ? 19 : 16} /> : <Ic n="chevron-up" size={isNarrow ? 19 : 16} />}</button>
                     );
                     const navGroup = (
                       <div style={css('display:flex;align-items:center;gap:6px;flex:0 0 auto;')}>
-                        <button data-tip="Previous step" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(-1)} style={navBtn(atStart)}><Ic n="chevron-left" size={16} /></button>
-                        <button data-tip="Next step" data-tip-pos="up" data-tip-align="left" onClick={() => this.step(1)} style={navBtn(atEnd)}><Ic n="chevron-right" size={16} /></button>
+                        <button data-tip="Previous step" data-tip-pos="up" data-tip-align="left" onClick={() => step(-1)} style={navBtn(atStart)}><Ic n="chevron-left" size={16} /></button>
+                        <button data-tip="Next step" data-tip-pos="up" data-tip-align="left" onClick={() => step(1)} style={navBtn(atEnd)}><Ic n="chevron-right" size={16} /></button>
                       </div>
                     );
                     const stepChip = <div style={css("flex:0 0 auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--mute);width:48px;")}>{stepLabel}</div>;
@@ -1233,25 +1201,24 @@ export class App extends React.Component<AppProps> {
           </div>
         </div>
 
-        {this.s.promptText !== null && (
-          <div onPointerDown={() => this.s.clearPrompt()} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
+        {state.promptText !== null && (
+          <div onPointerDown={() => state.clearPrompt()} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
             <div onPointerDown={(e) => e.stopPropagation()} style={css('width:560px;max-width:90vw;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;gap:12px;')}>
               <div style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>Copy prompt manually</div>
               <div style={css('font-size:12px;color:var(--dim);line-height:1.5;')}>Clipboard access was blocked — select all and copy the block below.</div>
               <textarea
                 readOnly
                 autoFocus
-                value={this.s.promptText}
+                value={state.promptText}
                 onFocus={(e) => e.currentTarget.select()}
                 style={{ width: '100%', height: 260, resize: 'vertical', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: 12, fontSize: 12, fontFamily: mono, outline: 'none' }}
               />
               <div style={css('display:flex;justify-content:flex-end;')}>
-                <button onClick={() => this.s.clearPrompt()} style={css('height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>Done</button>
+                <button onClick={() => state.clearPrompt()} style={css('height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>Done</button>
               </div>
             </div>
           </div>
         )}
       </div>
     );
-  }
 }
