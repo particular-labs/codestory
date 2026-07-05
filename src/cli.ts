@@ -3,6 +3,7 @@ import { defineCommand, runMain } from 'citty';
 import { resolve } from 'node:path';
 import { version } from '../package.json';
 import { initCommand } from './init';
+import { migrateCommand } from './migrate';
 import { validateDir } from './validate';
 
 const validate = defineCommand({
@@ -25,10 +26,11 @@ const validate = defineCommand({
 });
 
 const main = defineCommand({
-  meta: { name: 'codestory', version, description: 'Living storyjourneys for codebases' },
+  meta: { name: 'codestory', version, description: 'Living storyboards for codebases' },
   subCommands: {
     init: initCommand,
     validate,
+    migrate: migrateCommand,
     present: () => import('./present').then((m) => m.presentCommand),
     skill: () => import('./skill-install').then((m) => m.skillCommand),
   },

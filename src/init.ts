@@ -20,7 +20,7 @@ export function scaffoldDir(dir: string, project: string): void {
   };
 
   const journey = {
-    $schema: 'codestory/journey.v0',
+    $schema: 'codestory/journey.v1',
     version: 1,
     id: 'example',
     title: 'Example journey',

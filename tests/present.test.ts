@@ -14,7 +14,7 @@ function fixtureRepo(): string {
     personas: [{ id: 'ops', title: 'Ops', start: { journey: 'alpha', entry: 'start' }, journeys: ['alpha'] }],
   }));
   writeFileSync(join(dir, 'alpha.journey.json'), JSON.stringify({
-    $schema: 'codestory/journey.v0', version: 1, id: 'alpha', title: 'Alpha',
+    $schema: 'codestory/journey.v1', version: 1, id: 'alpha', title: 'Alpha',
     entries: ['start'], steps: [{ id: 'a', type: 'action', label: 'A' }],
   }));
   return dir;
@@ -97,7 +97,7 @@ describe('notes API', () => {
 
     expect(existsSync(join(dir, 'notes.json'))).toBe(true);
     const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
-    expect(persisted.$schema).toBe('codestory/notes.v0');
+    expect(persisted.$schema).toBe('codestory/notes.v1');
     expect(persisted.notes).toHaveLength(1);
 
     const journeys = (await (await app.request('/api/journeys')).json()) as { notes: Array<{ id: string }> };

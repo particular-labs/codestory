@@ -9,8 +9,13 @@
 ```bash
 npx @particular-labs/codestory init      # scaffold .codestory/ with an example journey
 npx @particular-labs/codestory validate   # parse + referential checks (exit 0 = clean)
+npx @particular-labs/codestory migrate     # upgrade .codestory files to the latest format version
 npx @particular-labs/codestory present     # serve the viewer at http://localhost:4747
 ```
+
+The file format is versioned via each file's `$schema` (e.g. `codestory/journey.v1`).
+When codestory ships a new format, `migrate` walks old files up the version chain to
+the latest, so journeys authored against an earlier release keep opening.
 
 Requires Node >= 20. `present --no-open` skips launching the browser; `--port` changes the port.
 

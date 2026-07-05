@@ -27,7 +27,7 @@ const manifest: Json = {
 };
 
 const alpha: Json = {
-  $schema: 'codestory/journey.v0',
+  $schema: 'codestory/journey.v1',
   version: 1,
   id: 'alpha',
   title: 'Alpha',
@@ -46,7 +46,7 @@ const alpha: Json = {
 };
 
 const beta: Json = {
-  $schema: 'codestory/journey.v0',
+  $schema: 'codestory/journey.v1',
   version: 1,
   id: 'beta',
   title: 'Beta',
@@ -89,7 +89,7 @@ describe('validateDir', () => {
   test('schema violation reported with file', async () => {
     const r = await issuesOf({
       ...good,
-      '.codestory/bad.journey.json': { $schema: 'codestory/journey.v0', version: 1, id: 'bad', title: 'Bad', steps: [{ id: 'n', type: 'wat', label: 'N' }] },
+      '.codestory/bad.journey.json': { $schema: 'codestory/journey.v1', version: 1, id: 'bad', title: 'Bad', steps: [{ id: 'n', type: 'wat', label: 'N' }] },
     });
     expect(r.ok).toBe(false);
     expect(r.issues.some((i) => i.file.includes('bad.journey.json'))).toBe(true);
@@ -246,7 +246,7 @@ describe('validateDir', () => {
 
   // ── notes.v0 sidecar ──
 
-  const notesFile = (notes: unknown[]): Json => ({ $schema: 'codestory/notes.v0', version: 1, notes });
+  const notesFile = (notes: unknown[]): Json => ({ $schema: 'codestory/notes.v1', version: 1, notes });
 
   test('absent notes.json is fine; result.notes is []', async () => {
     const r = await issuesOf(good);

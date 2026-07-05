@@ -18,7 +18,7 @@ const manifest = {
 
 // spec-grade journey straight from KB #182's example
 const journey = {
-  $schema: 'codestory/journey.v0',
+  $schema: 'codestory/journey.v1',
   version: 1,
   id: 'turnover-dispatch',
   title: 'Turnover dispatch',
@@ -80,7 +80,7 @@ describe('JourneySchema', () => {
 
   test('minimal journey = steps+edges envelope only', () => {
     const b = JourneySchema.parse({
-      $schema: 'codestory/journey.v0',
+      $schema: 'codestory/journey.v1',
       version: 1,
       id: 'mini',
       title: 'Mini',
@@ -123,7 +123,7 @@ describe('JourneySchema', () => {
 });
 
 const notesFile = {
-  $schema: 'codestory/notes.v0',
+  $schema: 'codestory/notes.v1',
   version: 1,
   notes: [
     { id: 'n1', journey: 'turnover-dispatch', step: 'trig', text: 'tighten the window', status: 'open', createdAt: '2026-07-03T00:00:00.000Z' },
@@ -141,14 +141,14 @@ describe('NotesFileSchema', () => {
 
   test('status defaults to open', () => {
     const f = NotesFileSchema.parse({
-      $schema: 'codestory/notes.v0', version: 1,
+      $schema: 'codestory/notes.v1', version: 1,
       notes: [{ id: 'n', journey: 'b', text: 't', createdAt: '2026-07-03T00:00:00.000Z' }],
     });
     expect(f.notes[0]?.status).toBe('open');
   });
 
   test('rejects wrong $schema', () => {
-    expect(() => NotesFileSchema.parse({ ...notesFile, $schema: 'codestory/notes.v1' })).toThrow();
+    expect(() => NotesFileSchema.parse({ ...notesFile, $schema: 'codestory/notes.v0' })).toThrow();
   });
 
   test('rejects empty text and empty id', () => {

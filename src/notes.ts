@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NotesFileSchema, type Note, type NoteStatus, type NotesFile } from './schema';
+import { NOTES_SCHEMA_ID, NotesFileSchema, type Note, type NoteStatus, type NotesFile } from './schema';
 
-// Write side of the notes.v0 sidecar. Reading + referential validation lives in
+// Write side of the notes sidecar. Reading + referential validation lives in
 // validate.ts (SSOT for validation); this module only appends notes and flips
 // their status, always through `.codestory/notes.json`.
 
@@ -14,7 +14,7 @@ export function notesPath(dir: string): string {
 }
 
 function emptyNotesFile(): NotesFile {
-  return { $schema: 'codestory/notes.v0', version: 1, notes: [] };
+  return { $schema: NOTES_SCHEMA_ID, version: 1, notes: [] };
 }
 
 /** Load the current notes file for mutation. Throws on a corrupt/invalid file so

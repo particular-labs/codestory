@@ -3,6 +3,13 @@ import { z } from 'zod';
 // SSOT: Keel KB #182 "Codestory v1 Spec" — schema section. Keys stay boring
 // (steps/edges/entries/exits/links/personas) for agent/stranger parseability.
 
+// Format ids — the `$schema` value carries the format version. These name the
+// LATEST format; `migrate` upgrades older files up to these (see migrate.ts).
+// Bump one of these + add a migration case when a format changes structurally.
+export const JOURNEY_SCHEMA_ID = 'codestory/journey.v1';
+export const NOTES_SCHEMA_ID = 'codestory/notes.v1';
+export const MANIFEST_SCHEMA_ID = 'codestory/manifest.v0';
+
 export const StatusSchema = z.enum(['planned', 'built', 'drifted']);
 export type Status = z.infer<typeof StatusSchema>;
 
@@ -59,7 +66,7 @@ export const LinkSchema = z.strictObject({
 export type Link = z.infer<typeof LinkSchema>;
 
 export const JourneySchema = z.strictObject({
-  $schema: z.literal('codestory/journey.v0'),
+  $schema: z.literal(JOURNEY_SCHEMA_ID),
   version: z.number().int(), // bump on structural change
   id: z.string().min(1),
   title: z.string().min(1),
@@ -89,7 +96,7 @@ export const PersonaSchema = z.strictObject({
 export type Persona = z.infer<typeof PersonaSchema>;
 
 export const ManifestSchema = z.strictObject({
-  $schema: z.literal('codestory/manifest.v0'),
+  $schema: z.literal(MANIFEST_SCHEMA_ID),
   version: z.number().int(),
   project: z.string().min(1),
   personas: z.array(PersonaSchema).default([]), // personas = named entry lenses; no single root
@@ -113,7 +120,7 @@ export const NoteSchema = z.strictObject({
 export type Note = z.infer<typeof NoteSchema>;
 
 export const NotesFileSchema = z.strictObject({
-  $schema: z.literal('codestory/notes.v0'),
+  $schema: z.literal(NOTES_SCHEMA_ID),
   version: z.number().int(),
   notes: z.array(NoteSchema).default([]),
 });

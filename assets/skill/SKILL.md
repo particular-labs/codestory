@@ -39,7 +39,7 @@ a nonzero exit means a broken reference, and you must not commit over it.
 ```jsonc
 // .codestory/<id>.journey.json — one journey per flow; file name === journey id
 {
-  "$schema": "codestory/journey.v0",
+  "$schema": "codestory/journey.v1",
   "version": 1,                 // bump on structural change
   "id": "signup",
   "title": "Sign up",
@@ -72,7 +72,7 @@ a nonzero exit means a broken reference, and you must not commit over it.
 
 ```jsonc
 // .codestory/notes.json — reviewer annotations sidecar (optional; never inline in a journey)
-{ "$schema": "codestory/notes.v0", "version": 1,
+{ "$schema": "codestory/notes.v1", "version": 1,
   "notes": [ { "id": "n1", "journey": "signup", "step": "valid?",
                "text": "Add password-strength check", "status": "open",
                "createdAt": "2026-07-03T00:00:00Z" } ] } // status: open | applied
@@ -142,3 +142,9 @@ Reviewers drop notes in the viewer against a journey/step; you resolve them:
 
 Run `codestory validate` before every commit. Exit 0 = references intact; nonzero
 = broken references you must fix first.
+
+## Upgrading old files
+
+The `$schema` on each file carries its format version. If `validate` rejects a file
+for a stale `$schema` (e.g. `codestory/journey.v0`), run `codestory migrate` — it
+walks every file up the version chain to the latest format, then re-validate.
