@@ -1,11 +1,16 @@
 import * as React from 'react';
 import { useStore } from 'zustand';
-import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type ExportOpts } from './export';
+import { composeExportPng, DEFAULT_EXPORT_OPTS, summarize, type ExportOpts } from './export';
 import { frameOffset } from './frame';
 import { activePrefix, deriveGraph, type Graph, unionOf } from './graph';
 import { Ic } from './icons';
 import { loadSettings } from './settings';
 import { createAppStore, type AppInit, type AppState } from './store';
+import { ExportPopover } from './components/ExportPopover';
+import { NotesHub } from './components/NotesHub';
+import { PromptModal } from './components/PromptModal';
+import { VersionsPicker } from './components/VersionsPicker';
+import { css, GLYPHS, mono, statusMeta, statusPill, stepKind, stepTitle, TYPE_TEXT } from './ui';
 import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlState';
 import { useCardDrag } from './useCardDrag';
 
@@ -72,37 +77,6 @@ export interface AppProps {
   /** Explicit flow choice (URL param or saved setting), or null when unset —
    *  the App then defaults to vertical on narrow viewports, horizontal otherwise. */
   flowDirection: 'horizontal' | 'vertical' | null;
-}
-
-// ── style helpers ──
-
-const mono = "'JetBrains Mono',monospace";
-const _cssCache: Record<string, React.CSSProperties> = {};
-
-/** Parse the design export's inline style strings into React style objects, once each. */
-function css(str: string): React.CSSProperties {
-  const hit = _cssCache[str];
-  if (hit) return hit;
-  const o: Record<string, string> = {};
-  str.split(';').forEach((p) => {
-    const i = p.indexOf(':');
-    if (i < 0) return;
-    let k = p.slice(0, i).trim();
-    const v = p.slice(i + 1).trim();
-    if (!k) return;
-    k = k.replace(/^-webkit-/, 'Webkit-').replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-    o[k] = v;
-  });
-  _cssCache[str] = o as React.CSSProperties;
-  return _cssCache[str]!;
-}
-
-function statusMeta(s: Status) {
-  return { label: s.charAt(0).toUpperCase() + s.slice(1), varName: '--' + s };
-}
-function statusPill(s: Status): React.CSSProperties {
-  const m = statusMeta(s);
-  return { color: `var(${m.varName})`, border: `1px solid var(${m.varName})`, background: 'transparent', borderRadius: 5, padding: '2px 7px', fontSize: 9.5, fontWeight: 600, fontFamily: mono, letterSpacing: '0.02em' };
 }
 
 // ── layered DAG auto-layout (from the design export, generalized for cards vs boxes) ──
@@ -273,16 +247,11 @@ const NARROW_QUERY = '(max-width: 719px)';
 const narrowMql = () => (typeof matchMedia === 'function' ? matchMedia(NARROW_QUERY) : null);
 const ROOT_LABEL = 'Root'; // one name for the chain-map home, shared by rail + breadcrumb
 const PATH_SEP = '\u0000'; // rail-tree path separator — no filesystem allows it in a filename, so never in a journey id
-const GLYPHS: Record<string, string> = { step: '', decision: '◇ ', subflow: '▤ ', exit: '⚑ ' };
-const TYPE_TEXT: Record<string, string> = { step: 'STEP', decision: 'DECISION', subflow: 'SUB-FLOW', exit: 'EXIT' };
-
 export interface StackEntry { id: string; callerJourney?: string; callerNode?: string }
 
 // AppState (the 24 fields) + all actions now live in the zustand vanilla store
 // (./store, SSOT). The App holds a per-mount store and reads it via `useStore`.
 
-const stepKind = (n: ApiStep) => (n.journey ? 'subflow' : n.type);
-const stepTitle = (n: ApiStep) => n.label ?? n.port ?? n.id;
 /** Estimated rendered height of a journey step card (pure; mirrors the card CSS:
  *  minHeight 64, ~22 chars/wrapped title line at STEP_W, +28px Step-into button).
  *  Ghosts render no button, but a step may be active in another variant, so we
@@ -846,68 +815,27 @@ export function App(props: AppProps) {
         </div>
 
         {state.notesOpen && (
-          <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 340, maxHeight: isNarrow ? '60vh' : '70vh' }}>
-            <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
-              <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Notes</div>
-              <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Click any step on a journey to leave a change-note.</div>
-            </div>
-            <div style={css('flex:1 1 auto;overflow-y:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px;')}>
-              {allNotes().length === 0 && (
-                <div style={css('padding:14px 6px;font-size:11.5px;color:var(--mute);text-align:center;')}>No notes yet.</div>
-              )}
-              {allNotes().map((n) => {
-                const nb = d.byId.get(n.journey);
-                const nn = n.step ? nb?.steps.find((x) => x.id === n.step) : undefined;
-                const applied = n.status === 'applied';
-                return (
-                  <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 9px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', opacity: applied ? 0.55 : 1 }}>
-                    <div style={css('display:flex;align-items:center;gap:7px;')}>
-                      <button onClick={() => goToNote(n)} title="Go to step" style={css("border:none;background:none;padding:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{nb?.title ?? n.journey}{nn ? ` › ${stepTitle(nn)}` : ''}</button>
-                      <span style={{ ...statusPill(applied ? 'built' : 'drifted'), marginLeft: 'auto', flex: '0 0 auto' }}>{n.status}</span>
-                    </div>
-                    <div style={{ fontSize: 12, lineHeight: 1.45, color: 'var(--fg)', textDecoration: applied ? 'line-through' : 'none' }}>{n.text}</div>
-                    <div style={css('display:flex;gap:6px;justify-content:flex-end;')}>
-                      {!applied && (
-                        <button onClick={() => applyNote(n.id)} title="Mark applied" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--built);background:transparent;color:var(--built);font-size:10.5px;font-weight:600;cursor:pointer;')}>✓ applied</button>
-                      )}
-                      <button onClick={() => deleteNote(n.id)} data-tip="Delete note" data-tip-pos="up" style={css('height:22px;padding:0 8px;border-radius:5px;border:1px solid var(--borderStrong);background:transparent;color:var(--dim);font-size:10.5px;font-weight:600;cursor:pointer;')}><Ic n="trash" size={13} /></button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {allNotes().length > 0 && (
-              <div style={css('padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;')}>
-                {openNotes().length > 0 && (
-                  <button onClick={() => void copyPrompt()} style={css('flex:1 1 auto;height:30px;border-radius:7px;border:1px solid var(--accent);background:var(--accentSoft);color:var(--accent);font-size:11.5px;font-weight:600;cursor:pointer;')}>{state.copied ? '✓ Copied' : `⧉ Copy ${openNotes().length} as prompt`}</button>
-                )}
-                <button onClick={() => clearNotes()} title="Delete all notes" style={css('flex:0 0 auto;height:30px;padding:0 11px;border-radius:7px;border:1px solid var(--borderStrong);background:var(--inset);color:var(--dim);font-size:11.5px;font-weight:600;cursor:pointer;')}>Clear all</button>
-              </div>
-            )}
-          </div>
+          <NotesHub
+            notes={allNotes()}
+            byId={d.byId}
+            openCount={openNotes().length}
+            copied={state.copied}
+            isNarrow={isNarrow}
+            goToNote={goToNote}
+            applyNote={applyNote}
+            deleteNote={deleteNote}
+            copyPrompt={copyPrompt}
+            clearNotes={clearNotes}
+          />
         )}
 
         {state.exportOpen && (
-          <div style={{ ...css('position:absolute;top:58px;z-index:30;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow);animation:slideUp 180ms ease;'), right: 12, left: isNarrow ? 12 : 'auto', width: isNarrow ? 'auto' : 280 }}>
-            <div style={css('padding:12px 14px 10px;border-bottom:1px solid var(--border);')}>
-              <div style={css('font-size:12.5px;font-weight:650;letter-spacing:-0.01em;')}>Export PNG</div>
-              <div style={css('font-size:10.5px;color:var(--mute);margin-top:2px;')}>Choose what to include.</div>
-            </div>
-            <div style={css('padding:8px 10px;display:flex;flex-direction:column;gap:2px;')}>
-              {EXPORT_TOGGLES.map(({ key, label }) => {
-                const on = state.exportOpts[key];
-                return (
-                  <button key={key} onClick={() => state.toggleExportOpt(key)} style={css('display:flex;align-items:center;gap:9px;padding:7px 8px;border:none;background:none;border-radius:7px;cursor:pointer;text-align:left;color:var(--fg);')}>
-                    <span style={{ flex: '0 0 auto', width: 16, height: 16, borderRadius: 5, border: `1px solid ${on ? 'var(--accent)' : 'var(--borderStrong)'}`, background: on ? 'var(--accent)' : 'transparent', color: 'var(--accentFg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <Ic n="check" size={11} />}</span>
-                    <span style={css('font-size:12.5px;')}>{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <div style={css('padding:10px 12px;border-top:1px solid var(--border);')}>
-              <button onClick={() => void exportPng()} style={css('width:100%;height:32px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12px;font-weight:650;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;')}><Ic n="download" size={14} />Export PNG</button>
-            </div>
-          </div>
+          <ExportPopover
+            exportOpts={state.exportOpts}
+            isNarrow={isNarrow}
+            toggleExportOpt={state.toggleExportOpt}
+            exportPng={exportPng}
+          />
         )}
 
         <div style={css('flex:1 1 auto;display:flex;min-height:0;position:relative;')}>
@@ -995,35 +923,18 @@ export function App(props: AppProps) {
                     </div>
                   </div>
                 )}
-                {hasVariants && isNarrow && !state.versionsOpen && (
-                  <button
-                    onClick={() => state.openVersions()}
-                    style={css('position:absolute;right:12px;top:12px;z-index:8;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px;box-shadow:var(--shadow);')}
-                  ><Ic n="branch" size={13} /> {journey?.variantOf ? journey.variantLabel ?? journey.id : 'Current'} <Ic n="chevron-down" size={13} /></button>
-                )}
-                {hasVariants && (!isNarrow || state.versionsOpen) && (
-                  <div style={{ ...css('position:absolute;top:14px;z-index:8;display:flex;flex-direction:column;gap:7px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);overflow-y:auto;animation:slideUp 200ms ease;'), right: 14, left: isNarrow ? 12 : 'auto', maxHeight: isNarrow ? '45vh' : 'none' }}>
-                    <div style={css('display:flex;align-items:center;')}>
-                      <div style={css('font-size:9.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--mute);')}>Versions</div>
-                      {isNarrow && (
-                        <button onClick={() => state.closeVersions()} style={css('margin-left:auto;width:26px;height:26px;border:none;background:none;color:var(--dim);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;')}><Ic n="x" size={15} /></button>
-                      )}
-                    </div>
-                    {versions.map((v) => (
-                      <label key={v.id} style={css('display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);cursor:pointer;')}>
-                        <input
-                          type="radio"
-                          name="cs-version"
-                          checked={journeyId === v.id}
-                          onChange={() => setVariant(baseEntryId, v.id)}
-                          style={{ accentColor: 'var(--accent)', margin: 0, cursor: 'pointer' }}
-                        />
-                        <span style={css('font-weight:550;')}>{v.variantOf ? v.variantLabel ?? v.id : 'Current'}</span>
-                        <span style={{ ...statusPill(v.status), marginLeft: 'auto' }}>{statusMeta(v.status).label}</span>
-                      </label>
-                    ))}
-                    <div style={css('font-size:10px;color:var(--mute);border-top:1px solid var(--border);padding-top:7px;margin-top:2px;')}>ghosts = other versions · <b style={css('color:var(--accent);font-weight:600;')}>+ new / Δ</b> vs current</div>
-                  </div>
+                {hasVariants && (
+                  <VersionsPicker
+                    versions={versions}
+                    journey={journey}
+                    journeyId={journeyId}
+                    baseEntryId={baseEntryId}
+                    isNarrow={isNarrow}
+                    versionsOpen={state.versionsOpen}
+                    setVariant={setVariant}
+                    openVersions={state.openVersions}
+                    closeVersions={state.closeVersions}
+                  />
                 )}
                 <div style={css('flex:1 1 auto;position:relative;overflow:auto;background:var(--bg);background-image:radial-gradient(var(--grid) 1px,transparent 1px);background-size:22px 22px;')}>
                   <div style={css('position:absolute;left:16px;top:14px;z-index:5;')}>
@@ -1202,22 +1113,7 @@ export function App(props: AppProps) {
         </div>
 
         {state.promptText !== null && (
-          <div onPointerDown={() => state.clearPrompt()} style={css('position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);')}>
-            <div onPointerDown={(e) => e.stopPropagation()} style={css('width:560px;max-width:90vw;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;gap:12px;')}>
-              <div style={css('font-size:14px;font-weight:650;letter-spacing:-0.01em;')}>Copy prompt manually</div>
-              <div style={css('font-size:12px;color:var(--dim);line-height:1.5;')}>Clipboard access was blocked — select all and copy the block below.</div>
-              <textarea
-                readOnly
-                autoFocus
-                value={state.promptText}
-                onFocus={(e) => e.currentTarget.select()}
-                style={{ width: '100%', height: 260, resize: 'vertical', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--inset)', color: 'var(--fg)', padding: 12, fontSize: 12, fontFamily: mono, outline: 'none' }}
-              />
-              <div style={css('display:flex;justify-content:flex-end;')}>
-                <button onClick={() => state.clearPrompt()} style={css('height:30px;padding:0 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--accentFg);font-size:12.5px;font-weight:600;cursor:pointer;')}>Done</button>
-              </div>
-            </div>
-          </div>
+          <PromptModal promptText={state.promptText} clearPrompt={state.clearPrompt} />
         )}
       </div>
     );
