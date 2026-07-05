@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { composeExportPng, DEFAULT_EXPORT_OPTS, EXPORT_TOGGLES, summarize, type ExportOpts } from './export';
 import { frameOffset } from './frame';
+import { activePrefix, deriveGraph, type Graph, unionOf } from './graph';
 import { Ic } from './icons';
 import { loadSettings, saveSettings } from './settings';
 import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlState';
@@ -206,7 +207,7 @@ function computeLayout(boxes: SizedBox[], edges: Array<[string, string]>, vertic
 
 // ── SVG edges (from the design export) ──
 
-type EdgeTuple = [string, string, string?];
+export type EdgeTuple = [string, string, string?];
 interface Rect { x: number; y: number; w: number; h: number }
 
 function edgesSvg(edges: EdgeTuple[], nodeMap: Record<string, Rect>, dims: { w: number; h: number }, activeSet: Set<string> | null, currentId: string | null, onLabel: ((id: string) => void) | null, vertical: boolean) {
@@ -338,7 +339,7 @@ export class App extends React.Component<AppProps, AppState> {
   private _initialLoc: Loc;
   private _restoring = false; // guard: don't echo a popstate/restore back into history
 
-  private _d: { byId: Map<string, ApiJourney>; order: string[]; chainEdges: EdgeTuple[]; personas: ApiPersona[]; variantsByBase: Map<string, ApiJourney[]>; subsByJourney: Map<string, string[]> } | null = null;
+  private _d: Graph | null = null;
   private _lay: Record<string, Layout> = {};
   private _es: EventSource | null = null;
   private _mql: MediaQueryList | null = null;
@@ -466,57 +467,7 @@ export class App extends React.Component<AppProps, AppState> {
 
   d() {
     if (this._d) return this._d;
-    const { journeys, manifest } = this.state.data;
-    const byId = new Map(journeys.map((b) => [b.id, b]));
-    const variantsByBase = new Map<string, ApiJourney[]>();
-    journeys.forEach((b) => {
-      if (b.variantOf) variantsByBase.set(b.variantOf, [...(variantsByBase.get(b.variantOf) ?? []), b]);
-    });
-    // the base-journey graph defines the tree; variants' extra sub refs don't hide journeys
-    const bases = journeys.filter((b) => !b.variantOf);
-    const subIds = new Set(bases.flatMap((b) => b.steps.map((n) => n.journey)).filter(Boolean) as string[]);
-    let order = bases.filter((b) => !subIds.has(b.id)).map((b) => b.id);
-    // journey id → its direct sub-flow journey ids (step.journey refs), in step order
-    const subsByJourney = new Map<string, string[]>();
-    bases.forEach((b) => {
-      const subs = b.steps.flatMap((n) => (n.journey ? [n.journey] : [])).filter((s, i, a) => a.indexOf(s) === i);
-      if (subs.length) subsByJourney.set(b.id, subs);
-    });
-    // cycle rescue: a mutually-referencing component has no unreferenced root —
-    // surface any base journey unreachable from the roots as a root itself
-    {
-      const reachable = new Set(order);
-      const queue = [...order];
-      while (queue.length) {
-        for (const s of subsByJourney.get(queue.shift()!) ?? []) {
-          if (!reachable.has(s)) { reachable.add(s); queue.push(s); }
-        }
-      }
-      order = [...order, ...bases.filter((b) => !reachable.has(b.id)).map((b) => b.id)];
-    }
-    const chainEdges: EdgeTuple[] = [];
-    for (const b of journeys) {
-      for (const l of b.links) {
-        if (order.includes(b.id) && order.includes(l.journey)) chainEdges.push([b.id, l.journey, `${l.exit} → ${l.entry}`]);
-      }
-    }
-    // journeys arrive in file order (alphabetical) — re-order along the chain so
-    // "JOURNEY n" and the rail read as the movie, not the directory listing
-    const indeg = new Map(order.map((id) => [id, 0]));
-    chainEdges.forEach(([, to]) => indeg.set(to, (indeg.get(to) ?? 0) + 1));
-    const queue = order.filter((id) => indeg.get(id) === 0);
-    const sorted: string[] = [];
-    while (queue.length) {
-      const u = queue.shift()!;
-      sorted.push(u);
-      chainEdges.filter(([from]) => from === u).forEach(([, to]) => {
-        indeg.set(to, indeg.get(to)! - 1);
-        if (indeg.get(to) === 0) queue.push(to);
-      });
-    }
-    order = [...sorted, ...order.filter((id) => !sorted.includes(id))]; // cycles/orphans keep file order
-    this._d = { byId, order, chainEdges, personas: manifest?.personas ?? [], variantsByBase, subsByJourney };
-    return this._d;
+    return (this._d = deriveGraph(this.state.data));
   }
 
   layout(key: string, boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout {
@@ -848,22 +799,12 @@ export class App extends React.Component<AppProps, AppState> {
     const journeyId = journey?.id ?? '';
     const ns = this.steps();
     const selI = this.selIndex();
-    const activeSet = new Set(ns.slice(0, selI < 0 ? 0 : selI + 1).map((n) => n.id));
+    const activeSet = activePrefix(ns, selI);
 
     // with variants, lay out the UNION of all versions so shared steps don't
     // jump when the picker switches; without, keep the plain per-journey layout
     const hasVariants = versions.length > 1;
-    const unionSteps: ApiStep[] = [];
-    {
-      const seen = new Set<string>();
-      versions.forEach((v) => v.steps.forEach((n) => { if (!seen.has(n.id)) { seen.add(n.id); unionSteps.push(n); } }));
-    }
-    const unionEdgeKeys = new Set<string>();
-    const unionEdges: Array<[string, string]> = [];
-    versions.forEach((v) => v.edges.forEach((e) => {
-      const k = `${e.from}>${e.to}`;
-      if (!unionEdgeKeys.has(k)) { unionEdgeKeys.add(k); unionEdges.push([e.from, e.to]); }
-    }));
+    const { steps: unionSteps, edges: unionEdges } = unionOf(versions);
     // gaps are clearance between boxes: main keeps the old rank pitch feel
     // (260-176 / 128-64); cross is breathing room — real sizes do the rest
     const journeyGaps = { main: vertical ? 64 : 84, cross: vertical ? 48 : 28 };
