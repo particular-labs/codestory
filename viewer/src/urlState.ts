@@ -11,8 +11,6 @@ export interface Loc {
   variants: Record<string, string>; // base journey id → chosen variant journey id
 }
 
-export const EMPTY_LOC: Loc = { journeys: [], step: null, persona: null, variants: {} };
-
 /** Keep only what's meaningful for the current view, so stale params don't stick:
  *  a `step` means nothing on the map (no journey), and a variant pick is irrelevant
  *  once you've left that journey (its base id is no longer in the drill-down). */

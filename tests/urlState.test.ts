@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { EMPTY_LOC, parseLocation, relevantLoc, serializeLocation, type Loc } from '../viewer/src/urlState';
+import { parseLocation, relevantLoc, serializeLocation, type Loc } from '../viewer/src/urlState';
 
+const EMPTY_LOC: Loc = { journeys: [], step: null, persona: null, variants: {} };
 const roundtrip = (loc: Loc) => parseLocation(serializeLocation(loc));
 
 describe('urlState codec', () => {
