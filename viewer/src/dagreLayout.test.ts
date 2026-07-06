@@ -82,6 +82,45 @@ test('cycles do not throw or hang; dagre resolves them via its internal acyclic 
     expect(p.x).toBeGreaterThanOrEqual(0);
     expect(p.y).toBeGreaterThanOrEqual(0);
   }
+  // non-vacuous: dagre must actually SPREAD the cycle, not collapse it to a single
+  // point. A degenerate all-{0,0} result would satisfy the finite/non-negative
+  // checks above, so assert at least two of the three nodes occupy distinct spots.
+  const distinct = new Set(Object.values(pos).map((p) => `${p.x},${p.y}`));
+  expect(distinct.size).toBeGreaterThanOrEqual(2);
+});
+
+test('reserved-word ids (constructor / __proto__ / next) lay out safely, not on the prototype', () => {
+  // ids come from user-authored .codestory/*.journey.json, so a step named
+  // `constructor` or `__proto__` must not throw (graphlib keys its node object by
+  // id) nor land on the OUTPUT object's prototype. A uniform key prefix inside
+  // dagreLayout + an Object.create(null) pos map guard both sides.
+  const reserved = ['constructor', '__proto__', 'hasOwnProperty', 'toString', 'next'];
+  const boxes = reserved.map((id) => ({ id, w: 100, h: 50 }));
+  const edges: Array<[string, string]> = [
+    ['constructor', '__proto__'],
+    ['__proto__', 'hasOwnProperty'],
+    ['hasOwnProperty', 'toString'],
+    ['toString', 'next'],
+    ['next', 'constructor'], // close the loop → also exercises the acyclic pass
+  ];
+
+  let layout: ReturnType<typeof dagreLayout> | undefined;
+  expect(() => {
+    layout = dagreLayout(boxes, edges, false, { main: 80, cross: 50 });
+  }).not.toThrow();
+
+  const pos = layout!.pos;
+  // every reserved id is a real OWN key (Object.keys sees it — proves __proto__ did
+  // not silently become a prototype assignment) with finite, non-negative coords.
+  expect(Object.keys(pos).sort()).toEqual([...reserved].sort());
+  for (const id of reserved) {
+    const p = pos[id]!;
+    expect(p).toBeDefined();
+    expect(Number.isFinite(p.x)).toBe(true);
+    expect(Number.isFinite(p.y)).toBe(true);
+    expect(p.x).toBeGreaterThanOrEqual(0);
+    expect(p.y).toBeGreaterThanOrEqual(0);
+  }
 });
 
 test('an edge endpoint missing from the box set is dropped, not thrown on', () => {
