@@ -14,6 +14,7 @@ import { Rail } from './components/Rail';
 import { NotesHub } from './components/NotesHub';
 import { PromptModal } from './components/PromptModal';
 import { css, GLYPHS, mono, statusMeta, statusPill, stepKind, stepTitle, TYPE_TEXT } from './ui';
+import { dagreLayout } from './dagreLayout';
 import { type Loc, parseLocation, relevantLoc, serializeLocation } from './urlState';
 import { useCardDrag } from './useCardDrag';
 
@@ -82,108 +83,13 @@ export interface AppProps {
   flowDirection: 'horizontal' | 'vertical' | null;
 }
 
-// ── layered DAG auto-layout (from the design export, generalized for cards vs boxes) ──
-// Size-aware Sugiyama subset: longest-path ranking → barycenter ordering sweeps
-// (crossing reduction) → cumulative per-rank packing using each box's real
-// estimated size, so tall boxes never overlap. Gaps are CLEARANCE between boxes.
+// ── layout types (shared by the render path + the dagre layout adapter) ──
+// Graph auto-layout is delegated to @dagrejs/dagre (see ./dagreLayout); the render
+// path consumes its `Layout` output unchanged. Gaps are CLEARANCE between boxes.
 
 interface LayoutGaps { main: number; cross: number }
 interface SizedBox { id: string; w: number; h: number }
 interface Layout { pos: Record<string, { x: number; y: number }>; w: number; h: number }
-
-function computeLayout(boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, g: LayoutGaps): Layout {
-  const PADX = 32, PADY = 28;
-  if (!boxes.length) return { pos: {}, w: PADX * 2, h: PADY * 2 };
-  const ids = new Set(boxes.map((n) => n.id));
-  const size: Record<string, { w: number; h: number }> = {};
-  const authored: Record<string, number> = {};
-  boxes.forEach((n, i) => { size[n.id] = { w: n.w, h: n.h }; authored[n.id] = i; });
-  const raw: Record<string, string[]> = {};
-  boxes.forEach((n) => { raw[n.id] = []; });
-  edges.forEach(([a, b]) => { if (ids.has(a) && ids.has(b) && a !== b) raw[a]!.push(b); });
-
-  // 1. detect back-edges (cycle closers) via DFS coloring so ranks stay monotonic
-  const color: Record<string, number> = {};
-  boxes.forEach((n) => { color[n.id] = 0; });
-  const back: Record<string, boolean> = {};
-  const dfs = (u: string) => {
-    color[u] = 1;
-    raw[u]!.forEach((v) => { if (color[v] === 1) back[u + '>' + v] = true; else if (color[v] === 0) dfs(v); });
-    color[u] = 2;
-  };
-  boxes.forEach((n) => { if (color[n.id] === 0) dfs(n.id); });
-
-  // 2. longest-path ranking over forward edges (Kahn relaxation)
-  const adj: Record<string, string[]> = {};
-  const pred: Record<string, string[]> = {};
-  const indeg: Record<string, number> = {};
-  boxes.forEach((n) => { adj[n.id] = []; pred[n.id] = []; indeg[n.id] = 0; });
-  edges.forEach(([a, b]) => {
-    if (!ids.has(a) || !ids.has(b) || a === b || back[a + '>' + b]) return;
-    adj[a]!.push(b); pred[b]!.push(a); indeg[b]!++;
-  });
-  const rank: Record<string, number> = {};
-  boxes.forEach((n) => { rank[n.id] = 0; });
-  const q = boxes.filter((n) => indeg[n.id] === 0).map((n) => n.id);
-  while (q.length) {
-    const u = q.shift()!;
-    adj[u]!.forEach((v) => { if (rank[u]! + 1 > rank[v]!) rank[v] = rank[u]! + 1; if (--indeg[v]! === 0) q.push(v); });
-  }
-
-  // 3. bucket boxes by rank, preserving authored order → initial lane order
-  const cols: Record<number, string[]> = {};
-  let maxRank = 0;
-  boxes.forEach((n) => { const r = rank[n.id]!; (cols[r] = cols[r] ?? []).push(n.id); if (r > maxRank) maxRank = r; });
-
-  // 3b. crossing reduction: barycenter ordering sweeps (down, up, down).
-  // A box's key is the mean centered lane index of its neighbors in the
-  // sweep direction; stable sort + authored tie-break keeps it deterministic.
-  const laneIdx: Record<string, number> = {};
-  const reindex = (r: number) => (cols[r] ?? []).forEach((id, i) => { laneIdx[id] = i; });
-  for (let r = 0; r <= maxRank; r++) reindex(r);
-  const centered = (id: string) => laneIdx[id]! - ((cols[rank[id]!]?.length ?? 1) - 1) / 2;
-  const sweep = (up: boolean) => {
-    for (let s = 0; s <= maxRank; s++) {
-      const r = up ? maxRank - s : s;
-      const col = cols[r];
-      if (!col || col.length < 2) continue;
-      const key: Record<string, number> = {};
-      col.forEach((id) => {
-        const nb = (up ? adj : pred)[id]!.filter((m) => rank[m] !== r);
-        key[id] = nb.length ? nb.reduce((a, m) => a + centered(m), 0) / nb.length : centered(id);
-      });
-      cols[r] = [...col].sort((a, b) => key[a]! - key[b]! || authored[a]! - authored[b]!);
-      reindex(r);
-    }
-  };
-  sweep(false); sweep(true); sweep(false);
-
-  // 4. coordinates: main axis advances by each rank's max extent + gap;
-  // cross axis packs each rank cumulatively (size + gap) and centers the
-  // rank's total span against the widest rank.
-  const mainOf = (id: string) => (vertical ? size[id]!.h : size[id]!.w);
-  const crossOf = (id: string) => (vertical ? size[id]!.w : size[id]!.h);
-  const mainPad = vertical ? PADY : PADX, crossPad = vertical ? PADX : PADY;
-  const spanOf = (col: string[]) => col.reduce((a, id) => a + crossOf(id), 0) + (col.length - 1) * g.cross;
-  let maxSpan = 0;
-  for (let r = 0; r <= maxRank; r++) maxSpan = Math.max(maxSpan, spanOf(cols[r] ?? []));
-  const pos: Layout['pos'] = {};
-  let mainOff = mainPad;
-  for (let r = 0; r <= maxRank; r++) {
-    const col = cols[r] ?? [];
-    let crossOff = crossPad + (maxSpan - spanOf(col)) / 2;
-    let rankMain = 0;
-    col.forEach((id) => {
-      pos[id] = vertical ? { x: crossOff, y: mainOff } : { x: mainOff, y: crossOff };
-      crossOff += crossOf(id) + g.cross;
-      rankMain = Math.max(rankMain, mainOf(id));
-    });
-    mainOff += rankMain + g.main;
-  }
-  const acrossMain = mainOff - g.main + mainPad;
-  const acrossCross = crossPad * 2 + maxSpan;
-  return { pos, w: vertical ? acrossCross : acrossMain, h: vertical ? acrossMain : acrossCross };
-}
 
 // ── SVG edges (from the design export) ──
 
@@ -412,7 +318,7 @@ export function App(props: AppProps) {
 
   const layout = (key: string, boxes: SizedBox[], edges: Array<[string, string]>, vertical: boolean, gaps: LayoutGaps): Layout => {
     const k = `${key}:${vertical ? 'v' : 'h'}`;
-    layRef.current[k] = layRef.current[k] ?? computeLayout(boxes, edges, vertical, gaps);
+    layRef.current[k] = layRef.current[k] ?? dagreLayout(boxes, edges, vertical, gaps);
     return layRef.current[k]!;
   };
 

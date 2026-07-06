@@ -8,9 +8,12 @@ import { mountApp, resetApp } from './harness';
 // serialized `innerHTML` is byte-stable. happy-dom's CSS serialization is its own
 // (e.g. it expands `borderBottom` shorthand to longhand) — that's fine because BOTH
 // baseline and phase-N run through the same serializer; a real render change still
-// diffs. Every phase re-runs this: any snapshot diff is a regression to investigate
-// (except P2 layout, reviewed visually). Baseline captured on `viewer-decompose` with
-// zero app changes, so it IS main's output for FIXTURE.
+// diffs. Every phase re-runs this: any snapshot diff is a regression to investigate.
+// Baseline re-captured 2026-07-06 after P2 swapped the hand-rolled Sugiyama layout for
+// @dagrejs/dagre (./dagreLayout) — the geometry-only diff (card left/top, edge path
+// coords, canvas dims; no DOM/structure change) was reviewed and user-signed-off. From
+// here the dagre-layout output IS the baseline, so any snapshot diff is again a real
+// regression.
 
 afterEach(resetApp);
 
