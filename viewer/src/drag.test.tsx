@@ -1,8 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
-import { cleanup, fireEvent, render } from '@testing-library/react';
-import { createElement } from 'react';
-import { App, type AppProps } from './app';
-import { FIXTURE } from './parity.fixture';
+import { fireEvent } from '@testing-library/react';
+import { findCard, historySpy, mountApp, resetApp } from './harness';
 
 // DRAG-MOVE ORACLE. Pins `startDrag` (app.tsx ~L560-594) against the CURRENT class
 // before the P5 class→function + useCardDrag rewrite: a pointermove past a small
@@ -32,50 +30,14 @@ import { FIXTURE } from './parity.fixture';
 // _syncUrl only on click-driven navigation, so a drag that touches neither proves
 // the drag path never reaches that code — position isn't serialized to the URL.
 
-type Call = { method: 'push' | 'replace'; url: string };
-
-let calls: Call[] = [];
-let origPush: typeof window.history.pushState;
-let origReplace: typeof window.history.replaceState;
-
-function installHistorySpies() {
-  calls = [];
-  origPush = window.history.pushState.bind(window.history);
-  origReplace = window.history.replaceState.bind(window.history);
-  window.history.pushState = ((...args: Parameters<typeof window.history.pushState>) => {
-    calls.push({ method: 'push', url: String(args[2]) });
-    return origPush(...args);
-  }) as typeof window.history.pushState;
-  window.history.replaceState = ((...args: Parameters<typeof window.history.replaceState>) => {
-    calls.push({ method: 'replace', url: String(args[2]) });
-    return origReplace(...args);
-  }) as typeof window.history.replaceState;
-}
-
+// History spy stays opt-in (harness.historySpy): each test installs it and this
+// afterEach restores it, so parity's shared resetApp never touches history.
+let spy: ReturnType<typeof historySpy> | null = null;
 afterEach(() => {
-  window.history.pushState = origPush;
-  window.history.replaceState = origReplace;
-  localStorage.clear();
-  cleanup();
+  spy?.restore();
+  spy = null;
+  resetApp();
 });
-
-const BASE: Omit<AppProps, 'data'> = { defaultTheme: 'dark', accent: '', flowDirection: 'horizontal' };
-
-// same pattern as navigation.test.tsx / parity.test.tsx: happyDOM.setURL (not
-// replaceState) seeds location.search so the App constructor's
-// parseLocation(window.location.search) sees the right seed.
-function mountAt(path: string) {
-  const p = path.startsWith('/') ? path : `/${path}`;
-  (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM.setURL(`http://localhost${p}`);
-  return render(createElement(App, { data: FIXTURE, ...BASE }));
-}
-
-function findCard(container: HTMLElement, text: string): HTMLElement {
-  const cards = [...container.querySelectorAll('[data-export-step]')] as HTMLElement[];
-  const el = cards.find((c) => c.textContent?.includes(text));
-  expect(el).toBeTruthy(); // non-vacuity guard: the selector must find the card
-  return el!;
-}
 
 /** left/top as written by React (numeric style props get "<n>px" serialized). */
 function pos(el: HTMLElement): { left: number; top: number } {
@@ -97,8 +59,8 @@ const SEARCH_INPUT = 'input[placeholder="Search journeys & steps"]'; // isMap-on
 const SELECTED_SHADOW = '0 0 0 2px var(--accent)'; // isSel-only boxShadow (app.tsx ~L777)
 
 test('drag: dragging a map card moves it and does not enter the journey', () => {
-  installHistorySpies();
-  const { container } = mountAt('/');
+  const { calls } = (spy = historySpy());
+  const { container } = mountApp('/');
   expect(calls.length).toBe(0); // seed mount — no emission yet
 
   const signup = findCard(container, 'Signup');
@@ -118,8 +80,8 @@ test('drag: dragging a map card moves it and does not enter the journey', () => 
 });
 
 test('drag: dragging a step card moves it and does not select/navigate', () => {
-  installHistorySpies();
-  const { container } = mountAt('/?journeys=signup&step=start');
+  const { calls } = (spy = historySpy());
+  const { container } = mountApp('/?journeys=signup&step=start');
   expect(calls.length).toBe(0); // seed mount — no emission yet
 
   const startCard = findCard(container, 'Open form'); // step 'start', pre-selected via ?step=start
@@ -143,8 +105,8 @@ test('drag: dragging a step card moves it and does not select/navigate', () => {
 });
 
 test('drag: a sub-threshold move is still a click (pins the 3px boundary)', () => {
-  installHistorySpies();
-  const { container } = mountAt('/?journeys=signup');
+  const { calls } = (spy = historySpy());
+  const { container } = mountApp('/?journeys=signup');
   expect(calls.length).toBe(0); // seed mount — no emission yet
 
   const decision = findCard(container, 'Valid?');
