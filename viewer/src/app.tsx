@@ -2,7 +2,8 @@ import * as React from 'react';
 import { useStore } from 'zustand';
 import { composeExportPng, DEFAULT_EXPORT_OPTS, summarize, type ExportOpts } from './export';
 import { frameOffset } from './frame';
-import { activePrefix, deriveGraph, type Graph, unionOf } from './graph';
+import { activePrefix, continueTarget as continueTargetOf, deriveGraph, type Graph, unionOf } from './graph';
+import { buildPrompt } from './prompt';
 import { loadSettings } from './settings';
 import { createAppStore, type AppInit, type AppState } from './store';
 import { ExportPopover } from './components/ExportPopover';
@@ -398,34 +399,8 @@ export function App(props: AppProps) {
     if (n.step) state.selectNode(n.step);
   };
 
-  /** Serialize every open note + its step context into an LLM-ready markdown block. */
-  const buildPrompt = (): string => {
-    const out: string[] = [
-      '# Codestory annotations — apply these changes',
-      '',
-      'Each note below requests a change against a step in the codestory journeys under `.codestory/`. For each note, edit the referenced journey JSON and/or the code it points to, then mark the note applied.',
-      '',
-    ];
-    openNotes().forEach((note, i) => {
-      const journey = d.byId.get(note.journey);
-      const step = note.step ? journey?.steps.find((n) => n.id === note.step) : undefined;
-      out.push(`## Note ${i + 1}`);
-      out.push(`- journey: \`${note.journey}\`${journey ? ` (${journey.title})` : ''}`);
-      if (step) {
-        out.push(`- step: \`${step.id}\` — ${stepTitle(step)}`);
-        if (step.refs?.length) out.push(`- refs: ${step.refs.join(', ')}`);
-        if (step.contract) out.push(`- contract: in ${step.contract.in ?? '—'} → out ${step.contract.out ?? '—'}`);
-        if (step.acceptance?.length) { out.push('- acceptance:'); step.acceptance.forEach((a) => out.push(`  - ${a}`)); }
-      } else if (note.step) {
-        out.push(`- step: \`${note.step}\``);
-      }
-      out.push(`- change requested: ${note.text}`);
-      out.push('');
-    });
-    return out.join('\n');
-  };
   const copyPrompt = async () => {
-    const text = buildPrompt();
+    const text = buildPrompt(openNotes(), d);
     try {
       await navigator.clipboard.writeText(text);
       state.setCopied(true);
@@ -517,22 +492,12 @@ export function App(props: AppProps) {
 
   const returnToParent = () => state.returnToParent();
 
+  /** Wire the pure continue-target descriptor (graph.ts) to store actions: a `return`
+   *  descriptor walks back up the stack, a `continue` hops to its target journey. */
   const continueTarget = (): { label: string; onClick: () => void } | null => {
-    const ns = steps();
-    const cur = ns[selIndex()];
-    const journey = curJourney();
-    if (!cur || cur.type !== 'exit' || !journey) return null;
-    const e = curEntry();
-    if (e?.callerJourney && e.callerNode) {
-      const parent = d.byId.get(displayedId(e.callerJourney));
-      const returnEdge = parent?.edges.find((ed) => ed.from === e.callerNode);
-      const returnNode = parent?.steps.find((n) => n.id === returnEdge?.to);
-      return { label: `Return → ${returnNode ? stepTitle(returnNode) : parent?.title ?? 'parent'}`, onClick: () => returnToParent() };
-    }
-    const link = journey.links.find((l) => l.exit === cur.port);
-    const next = link ? d.byId.get(link.journey) : null;
-    if (next) return { label: `Continue → ${next.title}`, onClick: () => hop(next.id) };
-    return null;
+    const desc = continueTargetOf(steps(), selIndex(), curJourney(), curEntry(), d, state.variantSel);
+    if (!desc) return null;
+    return { label: desc.label, onClick: desc.kind === 'return' ? () => returnToParent() : () => hop(desc.targetId) };
   };
 
   // ── render ──

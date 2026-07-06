@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
+import type { StackEntry } from './app';
 import { FIXTURE } from './parity.fixture';
-import { activePrefix, deriveGraph, unionOf } from './graph';
+import { activePrefix, continueTarget, deriveGraph, unionOf } from './graph';
 
 // TDD guard for the pure graph functions extracted out of App (viewer-decompose).
 // Pins the ACTUAL shapes App.d()/render produce for FIXTURE so a refactor that
@@ -60,4 +61,38 @@ test('activePrefix follows the slice(0, selI<0?0:selI+1) rule', () => {
 
   // selIndex=2 → first 3 step ids
   expect([...activePrefix(steps, 2)]).toEqual(['start', 'valid', 'verify']);
+});
+
+test('continueTarget pins the exit-step descriptor (mid-step / continue / end / return)', () => {
+  const g = deriveGraph(FIXTURE);
+  const signup = g.byId.get('signup')!;
+  const account = g.byId.get('account')!;
+  const verifySub = g.byId.get('verify-sub')!;
+  const rootEntry = (id: string): StackEntry => ({ id });
+
+  // (1) mid-journey step (a decision, not an exit) → no continue affordance
+  const validIdx = signup.steps.findIndex((s) => s.id === 'valid');
+  expect(continueTarget(signup.steps, validIdx, signup, rootEntry('signup'), g, {})).toBeNull();
+
+  // (2) an exit that links onward (signup 'ok' port 'done' → account) → Continue descriptor
+  const okIdx = signup.steps.findIndex((s) => s.id === 'ok');
+  expect(continueTarget(signup.steps, okIdx, signup, rootEntry('signup'), g, {})).toEqual({
+    kind: 'continue',
+    label: 'Continue → Account',
+    targetId: 'account',
+  });
+
+  // (3) end-of-journey: account's terminal exit has no onward link, no caller → null
+  const doneIdx = account.steps.findIndex((s) => s.id === 'done');
+  expect(continueTarget(account.steps, doneIdx, account, rootEntry('account'), g, {})).toBeNull();
+
+  // (4) exit while drilled into a sub-flow (caller signup/verify) → Return descriptor,
+  // labelled by the caller's return-edge target (verify → save = "Create account")
+  const subEntry: StackEntry = { id: 'verify-sub', callerJourney: 'signup', callerNode: 'verify' };
+  const outIdx = verifySub.steps.findIndex((s) => s.id === 'out');
+  expect(continueTarget(verifySub.steps, outIdx, verifySub, subEntry, g, {})).toEqual({
+    kind: 'return',
+    label: 'Return → Create account',
+    targetId: 'signup',
+  });
 });

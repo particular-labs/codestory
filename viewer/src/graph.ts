@@ -2,7 +2,8 @@
 // These are behaviour-preserving lifts of App.d() and two render-local reductions.
 // They read ONLY their arguments — no `this`, no state, no caches — so they are
 // unit-testable in isolation and are the SSOT for how the journey graph is shaped.
-import type { ApiData, ApiJourney, ApiPersona, ApiStep, EdgeTuple } from './app';
+import type { ApiData, ApiJourney, ApiPersona, ApiStep, EdgeTuple, StackEntry } from './app';
+import { stepTitle } from './ui';
 
 export interface Graph {
   byId: Map<string, ApiJourney>;
@@ -87,4 +88,33 @@ export function unionOf(versions: ApiJourney[]): { steps: ApiStep[]; edges: Arra
  *  is selected). Verbatim from the render `activeSet` line. */
 export function activePrefix(steps: ApiStep[], selIndex: number): Set<string> {
   return new Set(steps.slice(0, selIndex < 0 ? 0 : selIndex + 1).map((n) => n.id));
+}
+
+/** The continue-affordance shown at an exit step: `return` walks back up the call
+ *  stack, `continue` hops to the linked journey. A PURE descriptor of what App's
+ *  onClick should do (App reads `kind`/`targetId` and wires returnToParent/hop) —
+ *  null when the selected step isn't an exit, or an exit with nowhere to go. */
+export type ContinueTarget = { kind: 'return' | 'continue'; label: string; targetId: string };
+
+export function continueTarget(
+  steps: ApiStep[],
+  selIndex: number,
+  journey: ApiJourney | null,
+  entry: StackEntry | null,
+  graph: Graph,
+  variantSel: Record<string, string>,
+): ContinueTarget | null {
+  const cur = steps[selIndex];
+  if (!cur || cur.type !== 'exit' || !journey) return null;
+  const displayedId = (baseId: string) => variantSel[baseId] ?? baseId;
+  if (entry?.callerJourney && entry.callerNode) {
+    const parent = graph.byId.get(displayedId(entry.callerJourney));
+    const returnEdge = parent?.edges.find((ed) => ed.from === entry.callerNode);
+    const returnNode = parent?.steps.find((n) => n.id === returnEdge?.to);
+    return { kind: 'return', label: `Return → ${returnNode ? stepTitle(returnNode) : parent?.title ?? 'parent'}`, targetId: displayedId(entry.callerJourney) };
+  }
+  const link = journey.links.find((l) => l.exit === cur.port);
+  const next = link ? graph.byId.get(link.journey) : null;
+  if (next) return { kind: 'continue', label: `Continue → ${next.title}`, targetId: next.id };
+  return null;
 }
