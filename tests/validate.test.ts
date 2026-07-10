@@ -1,64 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateDir } from '../src/validate';
-
-type Json = Record<string, unknown>;
-
-/** Write a fake repo: files maps repo-relative paths → JSON (objects) or raw strings. */
-function repo(files: Record<string, Json | string>): string {
-  const root = mkdtempSync(join(tmpdir(), 'codestory-'));
-  for (const [rel, content] of Object.entries(files)) {
-    const abs = join(root, rel);
-    mkdirSync(join(abs, '..'), { recursive: true });
-    writeFileSync(abs, typeof content === 'string' ? content : JSON.stringify(content));
-  }
-  return root;
-}
-
-const manifest: Json = {
-  $schema: 'codestory/manifest.v0',
-  version: 1,
-  project: 'Demo',
-  personas: [
-    { id: 'ops', title: 'Ops', start: { journey: 'alpha', entry: 'start' }, journeys: ['alpha', 'beta'] },
-  ],
-};
-
-const alpha: Json = {
-  $schema: 'codestory/journey.v1',
-  version: 1,
-  id: 'alpha',
-  title: 'Alpha',
-  entries: ['start'],
-  exits: ['done'],
-  steps: [
-    { id: 'a', type: 'action', label: 'A' },
-    { id: 'sub', type: 'action', label: 'Sub', journey: 'beta' },
-    { id: 'x', type: 'exit', port: 'done' },
-  ],
-  edges: [
-    { from: 'a', to: 'sub' },
-    { from: 'sub', to: 'x' },
-  ],
-  links: [{ exit: 'done', journey: 'beta', entry: 'start' }],
-};
-
-const beta: Json = {
-  $schema: 'codestory/journey.v1',
-  version: 1,
-  id: 'beta',
-  title: 'Beta',
-  entries: ['start'],
-  steps: [{ id: 'b', type: 'action', label: 'B' }],
-};
-
-const good = {
-  '.codestory/codestory.json': manifest,
-  '.codestory/alpha.journey.json': alpha,
-  '.codestory/beta.journey.json': beta,
-};
+import { alpha, beta, good, manifest, repo, type Json } from './fixtures';
 
 async function issuesOf(files: Record<string, Json | string>) {
   const r = await validateDir(join(repo(files), '.codestory'));

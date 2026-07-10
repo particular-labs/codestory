@@ -1,23 +1,25 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/present';
 import { validateDir } from '../src/validate';
+import { readNotesFile, repo } from './fixtures';
 
 function fixtureRepo(): string {
-  const root = mkdtempSync(join(tmpdir(), 'codestory-present-'));
-  const dir = join(root, '.codestory');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'codestory.json'), JSON.stringify({
-    $schema: 'codestory/manifest.v0', version: 1, project: 'Demo',
-    personas: [{ id: 'ops', title: 'Ops', start: { journey: 'alpha', entry: 'start' }, journeys: ['alpha'] }],
-  }));
-  writeFileSync(join(dir, 'alpha.journey.json'), JSON.stringify({
-    $schema: 'codestory/journey.v1', version: 1, id: 'alpha', title: 'Alpha',
-    entries: ['start'], steps: [{ id: 'a', type: 'action', label: 'A' }],
-  }));
-  return dir;
+  return join(
+    repo({
+      '.codestory/codestory.json': {
+        $schema: 'codestory/manifest.v0', version: 1, project: 'Demo',
+        personas: [{ id: 'ops', title: 'Ops', start: { journey: 'alpha', entry: 'start' }, journeys: ['alpha'] }],
+      },
+      '.codestory/alpha.journey.json': {
+        $schema: 'codestory/journey.v1', version: 1, id: 'alpha', title: 'Alpha',
+        entries: ['start'], steps: [{ id: 'a', type: 'action', label: 'A' }],
+      },
+    }),
+    '.codestory',
+  );
 }
 
 function fakeDist(): string {
@@ -96,7 +98,7 @@ describe('notes API', () => {
     expect(note.createdAt).toMatch(/\dT\d/); // ISO-ish
 
     expect(existsSync(join(dir, 'notes.json'))).toBe(true);
-    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    const persisted = readNotesFile(dir);
     expect(persisted.$schema).toBe('codestory/notes.v1');
     expect(persisted.notes).toHaveLength(1);
 
@@ -126,8 +128,8 @@ describe('notes API', () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status: string }).status).toBe('applied');
 
-    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
-    expect(persisted.notes[0].status).toBe('applied');
+    const persisted = readNotesFile(dir);
+    expect(persisted.notes[0]?.status).toBe('applied');
   });
 
   test('POST status flip 404s on unknown id', async () => {
@@ -143,7 +145,7 @@ describe('notes API', () => {
 
     const res = await app.request(postJson({ id: note.id, delete: true }));
     expect(res.status).toBe(200);
-    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    const persisted = readNotesFile(dir);
     expect(persisted.notes).toHaveLength(0);
 
     expect((await app.request(postJson({ id: note.id, delete: true }))).status).toBe(404);
@@ -158,7 +160,7 @@ describe('notes API', () => {
     const res = await app.request(postJson({ clear: true }));
     expect(res.status).toBe(200);
     expect(((await res.json()) as { cleared: number }).cleared).toBe(2);
-    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    const persisted = readNotesFile(dir);
     expect(persisted.notes).toHaveLength(0);
     expect((await validateDir(dir)).ok).toBe(true);
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scaffoldDir } from '../src/init';
@@ -11,60 +11,12 @@ import {
   setNoteStatusHandler,
   validateHandler,
 } from '../src/mcp-tools';
+import { aBetaJourneyDir, readNotesFile } from './fixtures';
 
 function scaffold(): string {
   const root = mkdtempSync(join(tmpdir(), 'codestory-mcp-'));
   const dir = join(root, '.codestory');
   scaffoldDir(dir, 'Demo');
-  return dir;
-}
-
-/** A repo with a sub-journey ref + a link, for get_journey_context coverage. */
-function withRelatedJourney(): string {
-  const root = mkdtempSync(join(tmpdir(), 'codestory-mcp-ctx-'));
-  const dir = join(root, '.codestory');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, 'codestory.json'),
-    JSON.stringify({
-      $schema: 'codestory/manifest.v0',
-      version: 1,
-      project: 'Demo',
-      personas: [{ id: 'ops', title: 'Ops', start: { journey: 'alpha', entry: 'start' }, journeys: ['alpha', 'beta'] }],
-    }),
-  );
-  writeFileSync(
-    join(dir, 'alpha.journey.json'),
-    JSON.stringify({
-      $schema: 'codestory/journey.v1',
-      version: 1,
-      id: 'alpha',
-      title: 'Alpha',
-      entries: ['start'],
-      exits: ['done'],
-      steps: [
-        { id: 'a', type: 'action', label: 'A' },
-        { id: 'sub', type: 'action', label: 'Sub', journey: 'beta' },
-        { id: 'x', type: 'exit', port: 'done' },
-      ],
-      edges: [
-        { from: 'a', to: 'sub' },
-        { from: 'sub', to: 'x' },
-      ],
-      links: [{ exit: 'done', journey: 'beta', entry: 'start' }],
-    }),
-  );
-  writeFileSync(
-    join(dir, 'beta.journey.json'),
-    JSON.stringify({
-      $schema: 'codestory/journey.v1',
-      version: 1,
-      id: 'beta',
-      title: 'Beta',
-      entries: ['start'],
-      steps: [{ id: 'b', type: 'action', label: 'B' }],
-    }),
-  );
   return dir;
 }
 
@@ -125,9 +77,9 @@ describe('append_note', () => {
     expect(r.note.step).toBe('start');
     expect(r.note.status).toBe('open');
 
-    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
+    const persisted = readNotesFile(dir);
     expect(persisted.notes).toHaveLength(1);
-    expect(persisted.notes[0].id).toBe(r.note.id);
+    expect(persisted.notes[0]?.id).toBe(r.note.id);
   });
 
   test('rejects an unknown journey without writing', async () => {
@@ -158,8 +110,8 @@ describe('set_note_status', () => {
     if (!r.ok) throw new Error('unreachable');
     expect(r.note.status).toBe('applied');
 
-    const persisted = JSON.parse(readFileSync(join(dir, 'notes.json'), 'utf8'));
-    expect(persisted.notes[0].status).toBe('applied');
+    const persisted = readNotesFile(dir);
+    expect(persisted.notes[0]?.status).toBe('applied');
   });
 
   test('errors on an unknown note id', async () => {
@@ -172,7 +124,7 @@ describe('set_note_status', () => {
 
 describe('get_journey_context', () => {
   test('formats the journey and includes sub/linked journeys one level deep', async () => {
-    const r = await getJourneyContextHandler(withRelatedJourney(), { id: 'alpha' });
+    const r = await getJourneyContextHandler(aBetaJourneyDir(), { id: 'alpha' });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error('unreachable');
     expect(r.markdown).toContain('Alpha');
@@ -180,7 +132,7 @@ describe('get_journey_context', () => {
   });
 
   test('errors on an unknown journey id', async () => {
-    const r = await getJourneyContextHandler(withRelatedJourney(), { id: 'ghost' });
+    const r = await getJourneyContextHandler(aBetaJourneyDir(), { id: 'ghost' });
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error('unreachable');
     expect(r.error).toContain('ghost');
