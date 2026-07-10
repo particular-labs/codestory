@@ -1,0 +1,76 @@
+{
+  "$schema": "codestory/journey.v1",
+  "version": 1,
+  "id": "checkout",
+  "title": "Checkout",
+  "status": "drifted",
+  "owner": "demo",
+  "entries": ["start"],
+  "exits": ["placed"],
+  "steps": [
+    {
+      "id": "review-cart",
+      "type": "action",
+      "label": "Review cart",
+      "note": "Line items, quantities, and a shipping estimate before any forms.",
+      "contract": { "in": "Cart", "out": "CheckoutSession" },
+      "status": "built",
+      "tests": ["demo/checkout.test.ts"],
+      "ticket": "ASTRO-110"
+    },
+    {
+      "id": "shipping",
+      "type": "action",
+      "label": "Shipping details",
+      "note": "Address with live validation; oversized scopes flag freight shipping.",
+      "acceptance": ["Address autocomplete", "Freight flag over 20kg"],
+      "status": "built",
+      "tests": ["demo/checkout.test.ts"],
+      "ticket": "ASTRO-111"
+    },
+    {
+      "id": "pay-method",
+      "type": "decision",
+      "label": "Payment method?",
+      "note": "Card is live; wallet pay is drifted — the SDK got upgraded under it.",
+      "status": "drifted"
+    },
+    {
+      "id": "pay-card",
+      "type": "action",
+      "label": "Card payment",
+      "contract": { "in": "CheckoutSession", "out": "PaymentIntent" },
+      "status": "built",
+      "tests": ["demo/payments.test.ts"],
+      "ticket": "ASTRO-112"
+    },
+    {
+      "id": "pay-wallet",
+      "type": "action",
+      "label": "Wallet payment",
+      "note": "Needs re-verification after the provider SDK v5 upgrade.",
+      "status": "drifted",
+      "ticket": "ASTRO-125"
+    },
+    {
+      "id": "confirm",
+      "type": "action",
+      "label": "Order confirmation",
+      "note": "Receipt page + email; order number is the shopper's tracking handle.",
+      "status": "built",
+      "tests": ["demo/checkout.test.ts"],
+      "ticket": "ASTRO-113"
+    },
+    { "id": "out", "type": "exit", "port": "placed" }
+  ],
+  "edges": [
+    { "from": "review-cart", "to": "shipping" },
+    { "from": "shipping", "to": "pay-method" },
+    { "from": "pay-method", "to": "pay-card", "label": "card" },
+    { "from": "pay-method", "to": "pay-wallet", "label": "wallet" },
+    { "from": "pay-card", "to": "confirm" },
+    { "from": "pay-wallet", "to": "confirm" },
+    { "from": "confirm", "to": "out" }
+  ],
+  "links": [{ "exit": "placed", "journey": "fulfillment", "entry": "start" }]
+}

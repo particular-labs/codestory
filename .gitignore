@@ -7,3 +7,4 @@ viewer/node_modules/
 .serena/
 .playwright-mcp/
 .fallow-gate-off
+node-compile-cache/

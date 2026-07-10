@@ -1,0 +1,67 @@
+{
+  "$schema": "codestory/journey.v1",
+  "version": 1,
+  "id": "fulfillment",
+  "title": "Fulfillment",
+  "status": "built",
+  "owner": "demo",
+  "nonGoals": ["no multi-warehouse routing — single warehouse in v1"],
+  "entries": ["start"],
+  "exits": ["shipped"],
+  "steps": [
+    {
+      "id": "pick",
+      "type": "action",
+      "label": "Pick items",
+      "note": "Picking list groups orders by aisle; scopes and tripods live in different zones.",
+      "contract": { "in": "Order", "out": "PickList" },
+      "status": "built",
+      "tests": ["demo/fulfillment.test.ts"],
+      "ticket": "ASTRO-120"
+    },
+    {
+      "id": "pack",
+      "type": "action",
+      "label": "Pack & protect",
+      "note": "Optics get double-boxed with a fragile flag; accessories ride along.",
+      "acceptance": ["Fragile flag on optics", "Box size auto-suggested"],
+      "status": "built",
+      "tests": ["demo/fulfillment.test.ts"],
+      "ticket": "ASTRO-121"
+    },
+    {
+      "id": "courier",
+      "type": "decision",
+      "label": "Courier or freight?",
+      "note": "Weight and dimensions route big dobsonians to freight.",
+      "status": "built",
+      "tests": ["demo/fulfillment.test.ts"]
+    },
+    {
+      "id": "label-courier",
+      "type": "action",
+      "label": "Courier label",
+      "status": "built",
+      "tests": ["demo/shipping.test.ts"],
+      "ticket": "ASTRO-122"
+    },
+    {
+      "id": "label-freight",
+      "type": "action",
+      "label": "Freight booking",
+      "note": "Pallet booking with a pickup window; shopper gets a call-ahead.",
+      "status": "planned",
+      "ticket": "ASTRO-126"
+    },
+    { "id": "out", "type": "exit", "port": "shipped" }
+  ],
+  "edges": [
+    { "from": "pick", "to": "pack" },
+    { "from": "pack", "to": "courier" },
+    { "from": "courier", "to": "label-courier", "label": "courier" },
+    { "from": "courier", "to": "label-freight", "label": "freight" },
+    { "from": "label-courier", "to": "out" },
+    { "from": "label-freight", "to": "out" }
+  ],
+  "links": [{ "exit": "shipped", "journey": "returns", "entry": "start" }]
+}

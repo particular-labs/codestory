@@ -1,0 +1,53 @@
+{
+  "$schema": "codestory/journey.v1",
+  "version": 1,
+  "id": "returns",
+  "title": "Returns",
+  "status": "planned",
+  "owner": "demo",
+  "entries": ["start"],
+  "exits": ["closed"],
+  "steps": [
+    {
+      "id": "request",
+      "type": "action",
+      "label": "Return request",
+      "note": "Shopper opens a return from the order page; 30-day window, reason picker.",
+      "contract": { "in": "OrderId", "out": "ReturnCase" },
+      "status": "built",
+      "tests": ["demo/returns.test.ts"],
+      "ticket": "ASTRO-130"
+    },
+    {
+      "id": "inspect",
+      "type": "decision",
+      "label": "Inspection outcome?",
+      "note": "Warehouse inspects the returned optics — refund, replace, or reject.",
+      "status": "planned"
+    },
+    {
+      "id": "refund",
+      "type": "action",
+      "label": "Refund",
+      "note": "Refund to the original payment method; freight costs non-refundable.",
+      "status": "planned",
+      "ticket": "ASTRO-131"
+    },
+    {
+      "id": "replace",
+      "type": "action",
+      "label": "Replacement order",
+      "note": "Spawns a new fulfillment run at zero charge.",
+      "status": "planned",
+      "ticket": "ASTRO-132"
+    },
+    { "id": "out", "type": "exit", "port": "closed" }
+  ],
+  "edges": [
+    { "from": "request", "to": "inspect" },
+    { "from": "inspect", "to": "refund", "label": "refund" },
+    { "from": "inspect", "to": "replace", "label": "replace" },
+    { "from": "refund", "to": "out" },
+    { "from": "replace", "to": "out" }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "codestory/manifest.v0",
+  "version": 1,
+  "project": "Astro Outfitters (demo)",
+  "personas": [
+    {
+      "id": "shopper",
+      "title": "Shopper",
+      "persona": "A stargazer browsing for their first telescope — they live in the storefront and checkout.",
+      "start": { "journey": "storefront", "entry": "start" },
+      "journeys": ["storefront", "checkout"]
+    },
+    {
+      "id": "warehouse",
+      "title": "Warehouse",
+      "persona": "The warehouse crew picks, packs, and ships every placed order.",
+      "start": { "journey": "fulfillment", "entry": "start" },
+      "journeys": ["fulfillment"]
+    },
+    {
+      "id": "support",
+      "title": "Support",
+      "persona": "Support handles anything that comes back — returns, refunds, replacements.",
+      "start": { "journey": "returns", "entry": "start" },
+      "journeys": ["returns"]
+    },
+    {
+      "id": "ops",
+      "title": "Ops",
+      "persona": "Ops watches the whole movie — browse to buy to box to (occasionally) back again.",
+      "start": { "journey": "storefront", "entry": "start" },
+      "journeys": ["storefront", "checkout", "fulfillment", "returns"]
+    }
+  ]
+}

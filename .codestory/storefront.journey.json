@@ -1,0 +1,80 @@
+{
+  "$schema": "codestory/journey.v1",
+  "version": 1,
+  "id": "storefront",
+  "title": "Storefront",
+  "status": "built",
+  "owner": "demo",
+  "nonGoals": ["no personalization — everyone sees the same catalog in v1"],
+  "entries": ["start"],
+  "exits": ["cart-ready"],
+  "steps": [
+    {
+      "id": "browse",
+      "type": "action",
+      "label": "Browse catalog",
+      "note": "The shopper lands on the catalog grid — telescopes, mounts, eyepieces.",
+      "contract": { "in": "—", "out": "ProductGrid" },
+      "acceptance": ["Grid paginates", "Images lazy-load"],
+      "status": "built",
+      "tests": ["demo/storefront.test.ts"],
+      "ticket": "ASTRO-101"
+    },
+    {
+      "id": "search",
+      "type": "action",
+      "label": "Search & filter",
+      "note": "Filter by aperture, mount type, and price band; free-text search over names.",
+      "contract": { "in": "Query", "out": "ProductGrid" },
+      "acceptance": ["Filters compose", "Empty state suggests popular scopes"],
+      "status": "built",
+      "tests": ["demo/storefront.test.ts"],
+      "ticket": "ASTRO-102"
+    },
+    {
+      "id": "detail",
+      "type": "action",
+      "label": "Product detail",
+      "note": "Specs table, sky-condition guidance, and a comparison drawer.",
+      "contract": { "in": "ProductId", "out": "ProductPage" },
+      "status": "built",
+      "tests": ["demo/storefront.test.ts"],
+      "ticket": "ASTRO-103"
+    },
+    {
+      "id": "stock-check",
+      "type": "decision",
+      "label": "In stock?",
+      "note": "Out-of-stock items offer a restock alert instead of a dead end.",
+      "status": "planned"
+    },
+    {
+      "id": "restock-alert",
+      "type": "action",
+      "label": "Restock alert signup",
+      "note": "One-tap email alert; no account required.",
+      "status": "planned",
+      "ticket": "ASTRO-118"
+    },
+    {
+      "id": "add-to-cart",
+      "type": "action",
+      "label": "Add to cart",
+      "note": "Cart persists in localStorage for guests, server-side once signed in.",
+      "contract": { "in": "ProductId + Qty", "out": "Cart" },
+      "status": "built",
+      "tests": ["demo/cart.test.ts"],
+      "ticket": "ASTRO-104"
+    },
+    { "id": "out", "type": "exit", "port": "cart-ready" }
+  ],
+  "edges": [
+    { "from": "browse", "to": "search" },
+    { "from": "search", "to": "detail" },
+    { "from": "detail", "to": "stock-check" },
+    { "from": "stock-check", "to": "add-to-cart", "label": "in stock" },
+    { "from": "stock-check", "to": "restock-alert", "label": "sold out" },
+    { "from": "add-to-cart", "to": "out" }
+  ],
+  "links": [{ "exit": "cart-ready", "journey": "checkout", "entry": "start" }]
+}
