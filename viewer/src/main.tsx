@@ -15,14 +15,21 @@ const props = {
   flowDirection: resolvePref(P.get('flow'), s.flow, ['horizontal', 'vertical'] as const, null),
 };
 
-fetch('/api/journeys')
-  .then((r) => {
-    if (!r.ok) throw new Error(`GET /api/journeys → ${r.status}`);
-    return r.json() as Promise<ApiData>;
-  })
-  .then((data) => root.render(<App data={data} {...props} />))
-  .catch((e) => root.render(
-    <pre style={{ padding: 24, fontFamily: 'monospace' }}>
-      failed to load journeys: {String(e)}{'\n'}is `codestory present` running?
-    </pre>,
-  ));
+// `codestory build` inlines the whole payload as window.__CODESTORY_DATA__ — a static
+// export has no server, so use it directly and skip the fetch entirely.
+const embedded = window.__CODESTORY_DATA__;
+if (embedded) {
+  root.render(<App data={embedded} {...props} />);
+} else {
+  fetch('/api/journeys')
+    .then((r) => {
+      if (!r.ok) throw new Error(`GET /api/journeys → ${r.status}`);
+      return r.json() as Promise<ApiData>;
+    })
+    .then((data) => root.render(<App data={data} {...props} />))
+    .catch((e) => root.render(
+      <pre style={{ padding: 24, fontFamily: 'monospace' }}>
+        failed to load journeys: {String(e)}{'\n'}is `codestory present` running?
+      </pre>,
+    ));
+}

@@ -74,6 +74,15 @@ export interface ApiData {
   notes?: ApiNote[];
 }
 
+declare global {
+  interface Window {
+    // Present in the `codestory build` static export: the whole payload inlined into
+    // index.html. When set, the viewer reads it instead of fetching /api/journeys and
+    // never opens the SSE live-reload stream (there's no server behind a static export).
+    __CODESTORY_DATA__?: ApiData;
+  }
+}
+
 export interface AppProps {
   data: ApiData;
   defaultTheme: 'dark' | 'light';
@@ -253,10 +262,13 @@ export function App(props: AppProps) {
   React.useEffect(() => {
     const unsub = store.subscribe((s, prev) => syncUrl(s, prev));
     let es: EventSource | null = null;
-    try {
-      es = new EventSource('/api/events');
-      es.addEventListener('reload', () => { void refetch(); });
-    } catch { /* SSE unsupported — no live reload, viewer still works */ }
+    // static export (window.__CODESTORY_DATA__) has no server → never open the SSE stream
+    if (!window.__CODESTORY_DATA__) {
+      try {
+        es = new EventSource('/api/events');
+        es.addEventListener('reload', () => { void refetch(); });
+      } catch { /* SSE unsupported — no live reload, viewer still works */ }
+    }
     const mql = narrowMql();
     // one place updates isNarrow; a narrow→wide change also closes the drawer so it
     // can't linger as a stuck overlay when the rail returns inline
