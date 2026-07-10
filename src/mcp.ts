@@ -26,7 +26,7 @@ function errorResult(message: string): { content: Array<{ type: 'text'; text: st
 }
 
 /** Build the MCP server for one `.codestory/` directory (fixed at construction — one server per root). */
-export function buildMcpServer(rootDir: string): McpServer {
+function buildMcpServer(rootDir: string): McpServer {
   const server = new McpServer({ name: 'codestory', version });
 
   server.registerTool(
