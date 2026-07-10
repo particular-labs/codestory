@@ -32,6 +32,7 @@ const main = defineCommand({
     validate,
     migrate: migrateCommand,
     present: () => import('./present').then((m) => m.presentCommand),
+    mcp: () => import('./mcp').then((m) => m.mcpCommand),
     skill: () => import('./skill-install').then((m) => m.skillCommand),
   },
 });
