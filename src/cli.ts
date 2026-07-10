@@ -31,6 +31,7 @@ const main = defineCommand({
     init: initCommand,
     validate,
     migrate: migrateCommand,
+    build: () => import('./build').then((m) => m.buildCommand),
     present: () => import('./present').then((m) => m.presentCommand),
     skill: () => import('./skill-install').then((m) => m.skillCommand),
   },
