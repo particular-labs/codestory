@@ -2,7 +2,7 @@
 
 **Living journey maps for codebases.** Journeys are flows — a sequence of steps, decisions, and exits. Journeys chain into an end-to-end map by wiring one journey's exit **ports** to another journey's entries. Agents keep the journeys in sync with the code they describe, and a local viewer presents them.
 
-![viewer screenshot placeholder](./assets/screenshot.png)
+![codestory viewer](https://raw.githubusercontent.com/particular-labs/codestory/main/assets/screenshot.png)
 
 ## Quickstart
 
