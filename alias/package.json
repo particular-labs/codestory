@@ -1,7 +1,7 @@
 {
   "name": "codestory",
-  "version": "0.3.0",
-  "description": "Living journey maps for codebases — journeys chain flows end-to-end, agents maintain them, a local viewer presents them.",
+  "version": "0.4.0",
+  "description": "Living journey maps for codebases \u2014 journeys chain flows end-to-end, agents maintain them, a local viewer presents them.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -31,6 +31,6 @@
     "bin"
   ],
   "dependencies": {
-    "@particular-labs/codestory": "^0.3.0"
+    "@particular-labs/codestory": "^0.4.0"
   }
 }
