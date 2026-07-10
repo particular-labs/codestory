@@ -8,6 +8,7 @@ description: >-
   notes/annotations. Trigger phrases: "maintain flow journeys", "capture flows",
   "journey-first", "codestory journeys", "apply codestory notes",
   "audit journeys for drift".
+license: MIT
 ---
 
 # codestory
