@@ -1,6 +1,6 @@
 import { defineCommand } from 'citty';
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateDir, type ValidationIssue } from './validate';
 
@@ -11,11 +11,15 @@ const VIEWER_DIST = resolve(fileURLToPath(import.meta.url), '..', '..', 'viewer'
 /**
  * Insert `<script>window.__CODESTORY_DATA__ = {json}</script>` immediately BEFORE
  * the viewer's bundle script tag, so the global is defined before the app boots.
- * `</script` sequences in the payload are escaped to `<\/script` — otherwise a note
- * (or any content) containing a literal closing tag would terminate our script early.
+ * EVERY `<` in the payload is escaped to `<` (a valid escape inside a JSON
+ * string literal, so JSON.parse restores it). Escaping only `</script` is not enough:
+ * a payload like `<!--<script` flips the HTML parser into "double-escaped script"
+ * state, after which our `</script>` no longer closes the tag — the injected script
+ * becomes a syntax error and the following bundle `<script src>` is swallowed (blank
+ * page). Killing every `<` removes all `<`-based tokenizer transitions at once.
  */
 export function injectData(html: string, data: unknown): string {
-  const json = JSON.stringify(data).replace(/<\/script/gi, '<\\/script');
+  const json = JSON.stringify(data).replace(/</g, '\\u003c');
   const tag = `<script>window.__CODESTORY_DATA__ = ${json}</script>`;
   const i = html.search(/<script\b/i); // computed on the original html, before splicing
   if (i === -1) return html.replace(/<\/body>/i, `${tag}</body>`); // no bundle tag → drop it before </body>
@@ -47,6 +51,21 @@ export async function buildStatic(opts: { dir: string; out: string; dist?: strin
     };
   }
 
+  // A rebuild must not leave stale files from a previous run merged in. If `out` is a
+  // prior build artifact (has an index.html) wipe it first; if it's a non-empty dir that
+  // ISN'T ours, refuse rather than clobber it — guards against an accidental `-o src`.
+  if (existsSync(out)) {
+    if (existsSync(join(out, 'index.html'))) {
+      rmSync(out, { recursive: true, force: true });
+    } else if (readdirSync(out).length > 0) {
+      return {
+        ok: false,
+        issues: [{ file: out, message: 'output directory is not empty and is not a codestory build (no index.html) — refusing to overwrite; choose an empty or new directory' }],
+        outDir: out,
+      };
+    }
+  }
+
   mkdirSync(out, { recursive: true });
   cpSync(dist, out, { recursive: true });
 
@@ -55,6 +74,24 @@ export async function buildStatic(opts: { dir: string; out: string; dist?: strin
   writeFileSync(indexPath, injectData(readFileSync(indexPath, 'utf8'), data));
 
   return { ok: true, issues: [], outDir: out };
+}
+
+/**
+ * Best-effort one-line hint nudging consumers to gitignore the build output so it
+ * doesn't pollute their `git status`. Returns null (no hint) when the repo's
+ * .gitignore already covers the dir, when `out` sits outside `cwd`, or on any error —
+ * a courtesy tip must never break or fail a successful build.
+ */
+export function gitignoreTip(out: string, cwd: string = process.cwd()): string | null {
+  try {
+    const rel = relative(cwd, out);
+    if (!rel || rel.startsWith('..')) return null; // nothing sensible to suggest
+    const gi = join(cwd, '.gitignore');
+    if (existsSync(gi) && readFileSync(gi, 'utf8').includes(rel)) return null; // already covered
+    return `tip: add ${rel}/ to .gitignore`;
+  } catch {
+    return null;
+  }
 }
 
 export const buildCommand = defineCommand({
@@ -72,5 +109,7 @@ export const buildCommand = defineCommand({
       process.exit(1);
     }
     console.log(`✓ static viewer → ${r.outDir}`);
+    const tip = gitignoreTip(r.outDir);
+    if (tip) console.log(tip);
   },
 });
