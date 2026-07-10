@@ -1,0 +1,29 @@
+name: codestory validate
+description: Parse .codestory/ journeys and run referential checks — fails the job on any issue.
+author: Particular Labs
+
+inputs:
+  working-directory:
+    description: Directory to run codestory validate from (must contain .codestory/).
+    required: false
+    default: '.'
+  version:
+    description: codestory version to run via npx (e.g. "0.3.0"). Defaults to the latest published release.
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: '20'
+
+    - name: Run codestory validate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        # env indirection — never interpolate inputs directly into the script (script-injection hardening)
+        CODESTORY_VERSION: ${{ inputs.version }}
+      run: npx --yes "@particular-labs/codestory@${CODESTORY_VERSION}" validate
