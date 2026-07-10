@@ -29,18 +29,10 @@ function stepLine(s: Journey['steps'][number]): string[] {
   return lines;
 }
 
-/** Render one journey as compact markdown, including its steps/edges/links.
- *  `level` is the heading depth for the journey title (1 = `#`); its
- *  subsections (Steps/Edges/Links) render one level deeper. */
-function renderJourney(j: Journey, level: number): string[] {
-  const h = '#'.repeat(level);
-  const sub = '#'.repeat(level + 1);
-  const lines: string[] = [`${h} ${j.title} (\`${j.id}\`)`, metaLine(j)];
-  const ports = portsLine(j);
-  if (ports) lines.push(ports);
-  if (j.nonGoals?.length) lines.push(`non-goals: ${j.nonGoals.join('; ')}`);
-
-  lines.push('', `${sub} Steps`);
+/** Render a journey's Steps/Edges/Links subsections at heading depth `sub`
+ *  (edges/links are omitted when empty). */
+function renderStepsEdgesLinks(j: Journey, sub: string): string[] {
+  const lines: string[] = ['', `${sub} Steps`];
   for (const s of j.steps) lines.push(...stepLine(s));
 
   if (j.edges.length) {
@@ -52,6 +44,22 @@ function renderJourney(j: Journey, level: number): string[] {
     lines.push('', `${sub} Links`);
     for (const l of j.links) lines.push(`- exit \`${l.exit}\` → \`${l.journey}\` @ \`${l.entry}\``);
   }
+
+  return lines;
+}
+
+/** Render one journey as compact markdown, including its steps/edges/links.
+ *  `level` is the heading depth for the journey title (1 = `#`); its
+ *  subsections (Steps/Edges/Links) render one level deeper. */
+function renderJourney(j: Journey, level: number): string[] {
+  const h = '#'.repeat(level);
+  const sub = '#'.repeat(level + 1);
+  const lines: string[] = [`${h} ${j.title} (\`${j.id}\`)`, metaLine(j)];
+  const ports = portsLine(j);
+  if (ports) lines.push(ports);
+  if (j.nonGoals?.length) lines.push(`non-goals: ${j.nonGoals.join('; ')}`);
+
+  lines.push(...renderStepsEdgesLinks(j, sub));
 
   return lines;
 }
