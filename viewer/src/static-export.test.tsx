@@ -50,3 +50,19 @@ test('without the global: the live path still opens the SSE stream', () => {
   mountApp('/');
   expect(spy.esCount()).toBe(1); // `present` behavior untouched
 });
+
+// A static export has no server to persist note mutations, so the notes UI must not be
+// clickable — otherwise annotations silently vanish (data loss in the share-for-review
+// use case). The notes-hub affordance is hidden when __CODESTORY_DATA__ is present.
+test('with __CODESTORY_DATA__ set: the notes-hub affordance is hidden', () => {
+  G.__CODESTORY_DATA__ = {};
+  spy = spyNetwork();
+  const { container } = mountApp('/');
+  expect(container.querySelector('[data-tip^="Notes"]')).toBeNull(); // no notes button
+});
+
+test('without the global: the notes-hub affordance is present', () => {
+  spy = spyNetwork();
+  const { container } = mountApp('/');
+  expect(container.querySelector('[data-tip^="Notes"]')).not.toBeNull(); // live viewer keeps notes
+});

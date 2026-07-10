@@ -13,6 +13,9 @@ export interface HeaderProps {
   isMap: boolean;
   isJourney: boolean;
   vertical: boolean;
+  /** Static export (window.__CODESTORY_DATA__): no server to persist notes, so the
+   *  notes-hub affordance is hidden — clicking it would silently lose annotations. */
+  isStatic: boolean;
   project: string | undefined;
   issues: Array<{ file: string; message: string }>;
   query: string;
@@ -86,8 +89,8 @@ function ExportButton({ exportOpen, toggleExport }: Pick<HeaderProps, 'exportOpe
 }
 
 // Right-hand action bar: status legend + view/notes/link/export/theme controls.
-function HeaderActions(props: Pick<HeaderProps, 'isNarrow' | 'vertical' | 'notesOpen' | 'toggleNotes' | 'openNotesCount' | 'toggleFlow' | 'linkCopied' | 'copyLink' | 'exportOpen' | 'toggleExport' | 'theme' | 'toggleTheme'>) {
-  const { isNarrow, vertical, notesOpen, toggleNotes, openNotesCount, toggleFlow, linkCopied, copyLink, exportOpen, toggleExport, theme, toggleTheme } = props;
+function HeaderActions(props: Pick<HeaderProps, 'isNarrow' | 'vertical' | 'isStatic' | 'notesOpen' | 'toggleNotes' | 'openNotesCount' | 'toggleFlow' | 'linkCopied' | 'copyLink' | 'exportOpen' | 'toggleExport' | 'theme' | 'toggleTheme'>) {
+  const { isNarrow, vertical, isStatic, notesOpen, toggleNotes, openNotesCount, toggleFlow, linkCopied, copyLink, exportOpen, toggleExport, theme, toggleTheme } = props;
   return (
     <div style={{ ...css('display:flex;align-items:center;gap:8px;'), flex: '0 0 auto' }}>
       {!isNarrow && (
@@ -97,7 +100,7 @@ function HeaderActions(props: Pick<HeaderProps, 'isNarrow' | 'vertical' | 'notes
           <span style={css('display:flex;align-items:center;gap:5px;')}><span style={css('width:7px;height:7px;border-radius:50%;background:var(--drifted);')}></span>drifted</span>
         </div>
       )}
-      <NotesButton notesOpen={notesOpen} toggleNotes={toggleNotes} openNotesCount={openNotesCount} />
+      {!isStatic && <NotesButton notesOpen={notesOpen} toggleNotes={toggleNotes} openNotesCount={openNotesCount} />}
       <button data-tip={vertical ? 'Flow: vertical — switch to horizontal' : 'Flow: horizontal — switch to vertical'} onClick={() => toggleFlow()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}>{vertical ? <Ic n="arrows-ud" size={15} /> : <Ic n="arrows-lr" size={15} />}</button>
       <button data-tip={linkCopied ? 'Link copied' : 'Copy link to this view'} onClick={() => void copyLink()} style={css('width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:var(--inset);color:var(--dim);font-size:13px;display:flex;align-items:center;justify-content:center;')}><Ic n={linkCopied ? 'check' : 'link'} size={15} /></button>
       <ExportButton exportOpen={exportOpen} toggleExport={toggleExport} />
@@ -115,7 +118,7 @@ export function Header(props: HeaderProps) {
       )}
       <HeaderBrand isNarrow={props.isNarrow} project={props.project} issues={props.issues} />
       <HeaderCenter isNarrow={props.isNarrow} isMap={props.isMap} isJourney={props.isJourney} query={props.query} setQuery={props.setQuery} crumbs={props.crumbs} />
-      <HeaderActions isNarrow={props.isNarrow} vertical={props.vertical} notesOpen={props.notesOpen} toggleNotes={props.toggleNotes} openNotesCount={props.openNotesCount} toggleFlow={props.toggleFlow} linkCopied={props.linkCopied} copyLink={props.copyLink} exportOpen={props.exportOpen} toggleExport={props.toggleExport} theme={props.theme} toggleTheme={props.toggleTheme} />
+      <HeaderActions isNarrow={props.isNarrow} vertical={props.vertical} isStatic={props.isStatic} notesOpen={props.notesOpen} toggleNotes={props.toggleNotes} openNotesCount={props.openNotesCount} toggleFlow={props.toggleFlow} linkCopied={props.linkCopied} copyLink={props.copyLink} exportOpen={props.exportOpen} toggleExport={props.toggleExport} theme={props.theme} toggleTheme={props.toggleTheme} />
     </div>
   );
 }

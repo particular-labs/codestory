@@ -297,7 +297,13 @@ export function App(props: AppProps) {
   const openNotes = () => allNotes().filter((n) => n.status === 'open');
   const openNotesFor = (journey: string, step: string) => allNotes().filter((n) => n.journey === journey && n.step === step && n.status === 'open');
 
+  // Static export (window.__CODESTORY_DATA__): no server behind it, so note mutations
+  // can't be persisted. The notes-hub affordance is hidden (see Header), and postNote is
+  // a belt-and-braces no-op — never silently POST into the void and lose the annotation.
+  const isStatic = typeof window !== 'undefined' && !!window.__CODESTORY_DATA__;
+
   const postNote = async (body: Record<string, unknown>): Promise<boolean> => {
+    if (isStatic) { console.warn('codestory: notes are disabled in a static export (no server to persist to)'); return false; }
     try {
       const res = await fetch('/api/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) await refetch(); // snappy update; the file-watch SSE would refetch too
@@ -634,6 +640,7 @@ export function App(props: AppProps) {
           isMap={isMap}
           isJourney={isJourney}
           vertical={vertical}
+          isStatic={isStatic}
           project={state.data.manifest?.project}
           issues={state.data.issues ?? []}
           query={state.query}
