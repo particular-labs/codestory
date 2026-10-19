@@ -1,0 +1,31 @@
+{
+  "bpm_final": 97.5,
+  "drum_kit": {
+    "character": "hybrid",
+    "confidence": 0.9,
+    "elements": [
+      "kick",
+      "snare",
+      "hi-hats",
+      "clap",
+      "percussion"
+    ]
+  },
+  "groove": {
+    "feel": "quantized",
+    "notes": "A straightforward, driving 4/4 dance groove with a prominent kick on quarters, snare on 2 and 4, and energetic, tight synthetic hi-hats on 8ths and 16ths, occasionally accented by an open hi-hat."
+  },
+  "instrumentation": [
+    "drums",
+    "synth bass",
+    "synth pads",
+    "synth lead",
+    "sound effects"
+  ],
+  "production": {
+    "wet_dry": "balanced wet/dry mix, with dry drums and moderately wet synths/pads.",
+    "dynamics": "Fairly consistent and driving dynamics, typical of electronic dance music.",
+    "notes": "The mix is clean and punchy, with good separation. The drums are prominent and dry, providing a solid foundation. Synths have moderate reverb and delay, adding spaciousness without muddying the mix. Overall dynamics are high and consistent, typical for dance/promo music."
+  },
+  "generation_prompt": "Create a 15-second promo cut with an energetic, modern electronic dance music vibe at 97.5 BPM in D minor. Feature a driving hybrid drum kit with a punchy acoustic kick and snare, tight synthetic hi-hats, and a synthetic clap. The groove is machine-quantized. Include a strong synth bass, melodic synth leads, atmospheric pads, and subtle electronic effects. The production should have a balanced wet/dry mix, with prominent, dry drums and moderately wet synths, maintaining consistent, driving dynamics."
+}

@@ -1,0 +1,96 @@
+{
+  "transcript": "Building UI Used to be hard But No More Introducing KIVI UI Smooth And Fancy Animations Great design is not just about how it looks, but how it works. When you scroll through this section, you can feel the interface responding to your movement. This connection between the user's action and the digital response creates a truly immersive experience. Incredible to work with Jay. Highly recommended! Easy Installation npm shadcn@latest add https://kiviui.dev/r/circle-intro.json npx kiviui-cli add circle-intro You need to create a components.json file to add components. Proceed? - yes Select a component library > Radix Which preset would you like to use? > Nova Preflight checks. Verifying framework. Found Next.js. Validating Tailwind CSS. Found v4. Validating import alias. Writing components.json. Checking registry. Installing dependencies. Updating fonts. Updating files. Created 2 files: - components/circle-intro.tsx - lib/utils.ts Updating app/globals.css components lib circle-intro.tsx use client import { motion, Variants } from \"motion/react\"; import { useEffect, useRef, useState } from \"react\"; import { cn } from \"@/lib/utils\"; export interface Profile /** Display name (tooltip and image alt). */ name: string; /** Optional line under the name in the hover tooltip. */ role?: string; /** Avatar image URL. */ profile: string; interface CircularIntroProps /** People arranged in a ring; animation uses the array length for spacing */ profiles: Profile[]; /** Pin the ring at a phase (no automatic pop-in -> spin) */ initialPhase?: number; const [containerRef, setContainerRef] = useState<HTMLDivElement | null>(null); const [containerRadius, setContainerRadius] = useState<number>(0); const [avatarSize, setAvatarSize] = useState<number>(48); useEffect(() => { if (!containerRef) return; const updateSizes = () => { const element = containerRef.current; if (!element) return; const rect = element.getBoundingClientRect(); const computedAvatar = Math.max(Math.min(80, Math.round(rect.width / 2 - computedAvatar / 2) - 12), 48); const maxRadiusAllowed = Math.max(64, Math.min(Math.round(rect.width / 2 - computedAvatar / 2) - 12), 72); const autoRadius = Math.max(72, Math.min(maxRadiusAllowed, Math.round(rect.width / 3.35 - computedAvatar / 2) - 12)); // Some complex math to make sure the avatars are positioned nicely return Math.max(72, Math.min(maxRadiusAllowed, Math.round(rect.width / 3.35 - computedAvatar / 2) - 12)); // The logic seems off, let's simplify for now 7. Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2) - 12)); // If you want to customize this further, adjust the constants here. } }; let radius = 72; // Default radius. Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2))); return circleRadiusProp !== undefined && !Number.isFinite(circleRadiusProp) ? Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2))) : circleRadiusProp || (Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2)))); } const resolvedRadius = circleRadiusProp === undefined ? autoRadius : circleRadiusProp; const resolvedRadius = circleRadiusProp === undefined || !Number.isFinite(circleRadiusProp) ? autoRadius : circleRadiusProp; const resolvedRadius = !circleRadiusProp || !Number.isFinite(circleRadiusProp) ? autoRadius : circleRadiusProp; Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2)); 72; Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2)); KIVIUI.DEV",
+  "language": "English",
+  "hook": {
+    "timestamp_start": "00:00",
+    "timestamp_end": "00:04",
+    "hook_type": "pain_point",
+    "hook_text": "Building UI Used to be hard But No More Introducing KIVI UI",
+    "on_screen_text": "Building UI Used to be hard But No More Introducing KIVI UI"
+  },
+  "structural_beats": [
+    {
+      "timestamp_start": "00:00",
+      "timestamp_end": "00:04",
+      "beat_label": "hook",
+      "shot_type": "text_only",
+      "narration_summary": "Identifies the pain point of building UI and introduces KIVI UI as the solution.",
+      "on_screen_text": "Building UI Used to be hard But No More Introducing KIVI UI",
+      "pacing": "jump_cut"
+    },
+    {
+      "timestamp_start": "00:04",
+      "timestamp_end": "00:07",
+      "beat_label": "demo",
+      "shot_type": "screen_recording",
+      "narration_summary": "Visually demonstrates the KIVI UI platform with interactive drag-and-drop elements.",
+      "on_screen_text": "",
+      "pacing": "fast"
+    },
+    {
+      "timestamp_start": "00:07",
+      "timestamp_end": "00:08",
+      "beat_label": "feature_intro",
+      "shot_type": "text_only",
+      "narration_summary": "Introduces the feature of 'Smooth And Fancy Animations'.",
+      "on_screen_text": "Smooth And Fancy Animations",
+      "pacing": "jump_cut"
+    },
+    {
+      "timestamp_start": "00:08",
+      "timestamp_end": "00:17",
+      "beat_label": "feature_demo",
+      "shot_type": "animation",
+      "narration_summary": "Showcases various smooth UI animations, including scrolling text effects, image stacks, animated code annotations, and keyboard interactions.",
+      "on_screen_text": "Great design is not just about how it looks, but how it works. When you scroll through this section, you can feel the interface responding to your movement. This connection between the user's action and the digital response creates a truly immersive experience. Incredible to work with Jay. Highly recommended!",
+      "pacing": "fast"
+    },
+    {
+      "timestamp_start": "00:18",
+      "timestamp_end": "00:19",
+      "beat_label": "feature_intro",
+      "shot_type": "text_only",
+      "narration_summary": "Introduces the 'Easy Installation' feature.",
+      "on_screen_text": "Easy Installation",
+      "pacing": "jump_cut"
+    },
+    {
+      "timestamp_start": "00:19",
+      "timestamp_end": "00:35",
+      "beat_label": "feature_demo",
+      "shot_type": "screen_recording",
+      "narration_summary": "Demonstrates the quick and easy installation process via command line and highlights the created component files.",
+      "on_screen_text": "npm shadcn@latest add https://kiviui.dev/r/circle-intro.json npx kiviui-cli add circle-intro You need to create a components.json file to add components. Proceed? - yes Select a component library > Radix Which preset would you like to use? > Nova Preflight checks. Verifying framework. Found Next.js. Validating Tailwind CSS. Found v4. Validating import alias. Writing components.json. Checking registry. Installing dependencies. Updating fonts. Updating files. Created 2 files: - components/circle-intro.tsx - lib/utils.ts Updating app/globals.css components lib circle-intro.tsx use client import { motion, Variants } from \"motion/react\"; import { useEffect, useRef, useState } from \"react\"; import { cn } from \"@/lib/utils\"; export interface Profile /** Display name (tooltip and image alt). */ name: string; /** Optional line under the name in the hover tooltip. */ role?: string; /** Avatar image URL. */ profile: string; interface CircularIntroProps /** People arranged in a ring; animation uses the array length for spacing */ profiles: Profile[]; /** Pin the ring at a phase (no automatic pop-in -> spin) */ initialPhase?: number; const [containerRef, setContainerRef] = useState<HTMLDivElement | null>(null); const [containerRadius, setContainerRadius] = useState<number>(0); const [avatarSize, setAvatarSize] = useState<number>(48); useEffect(() => { if (!containerRef) return; const updateSizes = () => { const element = containerRef.current; if (!element) return; const rect = element.getBoundingClientRect(); const computedAvatar = Math.max(Math.min(80, Math.round(rect.width / 2 - computedAvatar / 2) - 12), 48); const maxRadiusAllowed = Math.max(64, Math.min(Math.round(rect.width / 2 - computedAvatar / 2) - 12), 72); const autoRadius = Math.max(72, Math.min(maxRadiusAllowed, Math.round(rect.width / 3.35 - computedAvatar / 2) - 12)); // Some complex math to make sure the avatars are positioned nicely return Math.max(72, Math.min(maxRadiusAllowed, Math.round(rect.width / 3.35 - computedAvatar / 2) - 12)); // The logic seems off, let's simplify for now 7. Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2) - 12)); // If you want to customize this further, adjust the constants here. } }; let radius = 72; // Default radius. Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2))); return circleRadiusProp !== undefined && !Number.isFinite(circleRadiusProp) ? Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2))) : circleRadiusProp || (Math.max(72, Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2)))); } const resolvedRadius = circleRadiusProp === undefined ? autoRadius : circleRadiusProp; const resolvedRadius = circleRadiusProp === undefined || !Number.isFinite(circleRadiusProp) ? autoRadius : circleRadiusProp; const resolvedRadius = !circleRadiusProp || !Number.isFinite(circleRadiusProp) ? autoRadius : circleRadiusProp; Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2)); 72; Math.min(maxRadiusAllowed, Math.round(width / 3.35 - computedAvatar / 2));",
+      "pacing": "fast"
+    },
+    {
+      "timestamp_start": "00:36",
+      "timestamp_end": "00:38",
+      "beat_label": "cta",
+      "shot_type": "text_only",
+      "narration_summary": "Call to action to visit the KIVI UI website.",
+      "on_screen_text": "KIVIUI.DEV",
+      "pacing": "medium"
+    }
+  ],
+  "cta": {
+    "timestamp_start": "00:36",
+    "cta_text": "KIVIUI.DEV",
+    "cta_type": "link_in_bio"
+  },
+  "style": {
+    "tone": "Professional, innovative, efficient, tech-focused",
+    "editing_rhythm": "rapid_fire",
+    "color_mood": "Clean, modern, bright (white background, pastel logo)",
+    "music_feel": "Upbeat, electronic, modern, energetic, driving",
+    "caption_style": "On-screen text, animated for emphasis and transitions.",
+    "presenter_energy": "educational"
+  },
+  "reusable_template_summary": {
+    "format_name": "Problem-Solution Dev Tool Feature Showcase",
+    "total_beats": 7,
+    "dominant_shot_type": "screen_recording",
+    "hook_formula": "Pain Point (Presents a common struggle) -> Solution Introduction (Introduces the tool as the answer)",
+    "replication_notes": "To replicate this format for a different brand: 1. **Identify a key pain point:** Start with 1-2 seconds of text-only beat highlighting a common user problem. Use a punchy, short phrase. 2. **Introduce your solution:** Immediately follow the pain point with your product's name/logo, emphasizing it as the answer. 3. **Showcase features with on-screen text:** Dedicate 1-2 beats per key feature. Each feature intro should be a brief text-only screen, followed by a dynamic visual demonstration. 4. **Dynamic Visual Demos:** For feature demonstrations, utilize screen recordings, animated UI examples, or product shots. Keep these segments short and fast-paced with jump cuts to maintain engagement. 5. **No verbal narration:** Rely solely on on-screen text, animated visuals, music, and sound effects to convey the message. 6. **Clean and modern aesthetic:** Use a minimalist white or light-colored background to keep focus on the product and text. 7. **High-energy music & SFX:** Employ an upbeat, modern electronic track and subtle UI sound effects (clicks, swooshes) to enhance the feeling of efficiency and innovation. 8. **Clear Call to Action:** Conclude with a simple, prominent on-screen CTA (e.g., website URL, download link) to guide viewers to the next step."
+  }
+}
